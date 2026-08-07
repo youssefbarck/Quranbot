@@ -1,0 +1,26 @@
+services:
+  - type: worker
+    name: quran-husun-bot
+    runtime: python
+    region: frankfurt
+    plan: free
+    branch: main
+    rootDir: .
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m bot.main
+    envVars:
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: ADMIN_TELEGRAM_ID
+        sync: false
+      - key: MORNING_TIME
+        value: "08:00"
+      - key: MIDDAY_TIME
+        value: "13:00"
+      - key: EVENING_TIME
+        value: "20:00"
+      - key: DEFAULT_TIMEZONE
+        value: "Africa/Algiers"
+    autoDeploy: true
