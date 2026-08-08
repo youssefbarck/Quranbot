@@ -87,6 +87,16 @@ def _to_async_url(url: str) -> str:
 
 
 _is_postgres = DATABASE_URL.startswith("postgresql://")
+
+# فحص مبكّر: إذا لم يُضبط DATABASE_URL، اطبع رسالة واضحة واخرج
+if not DATABASE_URL:
+    print("=" * 60, flush=True)
+    print("❌ خطأ: متغيّر البيئة DATABASE_URL غير مضبوط!", flush=True)
+    print("   اذهب إلى Render → Environment → أضف:", flush=True)
+    print("   DATABASE_URL = postgresql://user:pass@host/dbname", flush=True)
+    print("=" * 60, flush=True)
+    sys.exit(1)
+
 _engine_kwargs = {"echo": False}
 if _is_postgres:
     _engine_kwargs["pool_pre_ping"] = True
