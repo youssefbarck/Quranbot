@@ -1076,19 +1076,34 @@ async def _run_polling_with_keepalive():
 
 
 def main():
-    logger.info("📖 بوت الحصون الخمسة — البدء")
-    logger.info(f"  - الصباح: {MORNING_TIME}")
-    logger.info(f"  - الظهيرة: {MIDDAY_TIME}")
-    logger.info(f"  - المساء: {EVENING_TIME}")
-    logger.info(f"  - المنطقة الزمنية: {DEFAULT_TIMEZONE}")
-    logger.info(f"  - keep-alive: {'مُفعّل' if KEEPALIVE_ENABLED else 'مُعطّل'}")
-    if RENDER_EXTERNAL_URL or KEEPALIVE_ENABLED:
-        asyncio.run(_run_polling_with_keepalive())
-    else:
-        app = build_application()
-        asyncio.run(post_init(app))
-        logger.info("🚀 تشغيل البوت في وضع polling (محلي)...")
-        asyncio.run(app.run_polling(poll_interval=3, drop_pending_updates=True, close_loop=False))
+    # التقاط أي استثناء وطباعته بالكامل (Render يخفي stderr أحياناً)
+    import traceback
+    try:
+        logger.info("📖 بوت الحصون الخمسة — البدء")
+        logger.info(f"  - الصباح: {MORNING_TIME}")
+        logger.info(f"  - الظهيرة: {MIDDAY_TIME}")
+        logger.info(f"  - المساء: {EVENING_TIME}")
+        logger.info(f"  - المنطقة الزمنية: {DEFAULT_TIMEZONE}")
+        logger.info(f"  - keep-alive: {'مُفعّل' if KEEPALIVE_ENABLED else 'مُعطّل'}")
+        logger.info(f"  - DATABASE_URL يبدأ بـ postgresql: {_is_postgres}")
+        logger.info(f"  - BOT_TOKEN مضبوط: {bool(BOT_TOKEN)}")
+        logger.info(f"  - ADMIN_ID: {ADMIN_ID}")
+        if RENDER_EXTERNAL_URL or KEEPALIVE_ENABLED:
+            asyncio.run(_run_polling_with_keepalive())
+        else:
+            app = build_application()
+            asyncio.run(post_init(app))
+            logger.info("🚀 تشغيل البوت في وضع polling (محلي)...")
+            asyncio.run(app.run_polling(poll_interval=3, drop_pending_updates=True, close_loop=False))
+    except Exception as e:
+        logger.error("❌ خطأ أثناء التشغيل:")
+        logger.error(traceback.format_exc())
+        # أعد الطبع إلى stdout أيضاً حتى يظهر في سجلّات Render
+        print("❌ ERROR:", e, flush=True)
+        traceback.print_exc()
+        sys.stdout.flush()
+        sys.stderr.flush()
+        raise
 
 
 if __name__ == "__main__":
