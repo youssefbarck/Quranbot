@@ -708,7 +708,7 @@ async def _show_today(update, context):
         memo_surah = quran_data.page_to_surah(memo_page)
         juz = quran_data.page_to_juz(r_start)
 
-    today_date = date.today().strftime("%Y-%m-%d")
+    today_date = escape_md(date.today().strftime("%Y-%m-%d"))
     text = (
         f"📋 *مهام اليوم — {today_date}*\n\n"
         f"🌅 *الصباح \\- القراءة:*\n"
@@ -835,7 +835,7 @@ async def progress_command(update, context):
     recent_text = ""
     for m in reversed(recent):
         surah = quran_data.page_to_surah(m.page_number)
-        recent_text += f"• صفحة {m.page_number} \\({escape_md(surah.name_ar)}\\) — {m.date_memorized}\n"
+        recent_text += f"• صفحة {m.page_number} \\({escape_md(surah.name_ar)}\\) — {escape_md(str(m.date_memorized))}\n"
     text = (
         f"📊 *تقدمك في حفظ القرآن*\n\n`{bar}`\n"
         f"📖 المحفوظ: *{count} / {total}* صفحة \\({percent:.1f}%\\)\n"
@@ -1026,7 +1026,8 @@ DATE_FMT = "%Y-%m-%d"
 
 
 def _today_str():
-    return date.today().strftime(DATE_FMT)
+    """تاريخ اليوم بصيغة آمنة لـ Markdown V2 (الهيفنات مهرّبة)."""
+    return date.today().strftime("%Y-%m-%d").replace("-", "\\-")
 
 
 async def send_morning_message(bot, telegram_id):
@@ -1302,6 +1303,22 @@ async def post_shutdown(app):
         await runner.cleanup()
 
 
+async def _error_handler(update, context):
+    """معالج أخطاء شامل لمنع توقّف البوت عن الاستجابة عند خطأ Markdown أو غيره."""
+    error = context.error
+    logger.error(f"❌ خطأ أثناء معالجة تحديث: {type(error).__name__}: {error}")
+    # محاولة إرسال رسالة بسيطة للمستخدم بدلاً من الصمت
+    try:
+        if update and getattr(update, "effective_chat", None):
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text="⚠️ حدث خطأ بسيط أثناء تجهيز الرد\\. جرّبي مرة أخرى أو اكتبي /start\\.",
+                parse_mode=ParseMode.MARKDOWN_V2,
+            )
+    except Exception:
+        pass  # لا نريد أن يقع معالج الأخطاء نفسه في خطأ
+
+
 def build_application():
     """يبني تطبيق PTB مع كل المعالجات ويربط post_init/post_shutdown."""
     if not BOT_TOKEN:
@@ -1327,6 +1344,8 @@ def build_application():
     app.add_handler(CallbackQueryHandler(button_callback, pattern="^(today|fortresses|progress|settings)$"))
     app.add_handler(CallbackQueryHandler(evening_yes_callback, pattern="^evening_yes$"))
     app.add_handler(CallbackQueryHandler(evening_later_callback, pattern="^evening_later$"))
+    # معالج أخطاء شامل — يمنع توقّف البوت عن الاستجابة عند خطأ في تنسيق الرسالة
+    app.add_error_handler(_error_handler)
     return app
 
 
