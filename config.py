@@ -13,7 +13,8 @@ class Config:
     DATABASE_URL = os.getenv("DATABASE_URL", "").replace(
         "postgres://", "postgresql://"
     )
-    if DATABASE_URL and "sslmode" not in DATABASE_URL:
+    # نُضيف sslmode=require فقط لقواعد Postgres (وليس SQLite)
+    if DATABASE_URL and DATABASE_URL.startswith("postgresql://") and "sslmode" not in DATABASE_URL:
         DATABASE_URL += "?sslmode=require"
 
     ADMIN_ID = int(os.getenv("ADMIN_TELEGRAM_ID", "0") or "0")
@@ -26,11 +27,22 @@ class Config:
     DEFAULT_TIMEZONE = os.getenv("DEFAULT_TIMEZONE", "Africa/Algiers")
 
     PORT = int(os.getenv("PORT", "10000"))
-    RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL", "")
+    RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL", "").rstrip("/")
+
+    # keep-alive مدمج — يجعل الخدمة لا تنام على Render Free
+    KEEPALIVE_ENABLED = os.getenv("KEEPALIVE_ENABLED", "true").lower() == "true"
+    KEEPALIVE_INTERVAL = int(os.getenv("KEEPALIVE_INTERVAL", "280"))  # ثواني
 
     @classmethod
     def is_ready(cls) -> bool:
         return bool(cls.BOT_TOKEN and cls.DATABASE_URL)
+
+    @classmethod
+    def public_health_url(cls) -> str:
+        """يرد URL الـ health الكامل إذا كان RENDER_EXTERNAL_URL مضبوطاً"""
+        if cls.RENDER_EXTERNAL_URL:
+            return f"{cls.RENDER_EXTERNAL_URL}/health"
+        return ""
 
 
 config = Config()

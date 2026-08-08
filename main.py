@@ -1,5 +1,13 @@
 """
 النقطة الرئيسية لتشغيل البوت — طريقة الحصون الخمسة
+
+الاستراتيجية على Render Free:
+- البوت في وضع polling (يستقبل رسائل تيليجرام بـ long polling — آمن وبسيط)
+- خادم HTTP صغير على بورت Render (PORT) يقدم endpoint /health
+- مهمة self-ping كل 280 ثانية على RENDER_EXTERNAL_URL/health
+  ← هذا الطلب يأتي من الإنترنت فيعتبره Render نشاطاً ويبقي الخدمة مستيقظة
+
+لا حاجة لـ UptimeRobot أو منصة خارجية — كل شيء ذاتي.
 """
 import asyncio
 import logging
@@ -22,6 +30,7 @@ from .scheduler import (
     evening_yes_callback, evening_later_callback,
 )
 from . import scheduler as bot_scheduler
+from .keepalive import start_keepalive_server
 
 logging.basicConfig(
     format="%(asctime)s — %(name)s — %(levelname)s — %(message)s",
@@ -80,10 +89,54 @@ async def _periodic_reschedule(bot):
             logger.error(f"خطأ في إعادة الجدولة: {e}")
 
 
+async def _run_polling_with_keepalive():
+    """يشغّل البوت بـ polling + خادم keep-alive في نفس الـ event loop"""
+    app = build_application()
+
+    # بدء خادم keep-alive أولاً (لو احتجنا فحص صحة قبل بدء البوت)
+    keepalive_runner = None
+    keepalive_task = None
+    if config.KEEPALIVE_ENABLED:
+        public_url = config.public_health_url()
+        logger.info(f"🌐 بدء خادم keep-alive على المنفذ {config.PORT}...")
+        keepalive_runner, keepalive_task = await start_keepalive_server(
+            port=config.PORT,
+            public_health_url=public_url,
+            keepalive_interval=config.KEEPALIVE_INTERVAL,
+        )
+        if public_url:
+            logger.info(f"✅ keep-alive نشط — self-ping كل {config.KEEPALIVE_INTERVAL} ثانية إلى {public_url}")
+        else:
+            logger.warning("⚠️ RENDER_EXTERNAL_URL غير مضبوط — الخدمة قد تنام. "
+                           "أضف متغير البيئة RENDER_EXTERNAL_URL في Render")
+
+    # تهيئة البوت والمجدول
+    await post_init(app)
+
+    logger.info("🚀 تشغيل البوت في وضع polling...")
+    try:
+        await app.run_polling(
+            poll_interval=3,
+            drop_pending_updates=True,
+            close_loop=False,
+        )
+    finally:
+        # تنظيف الموارد عند الإغلاق
+        if keepalive_task:
+            keepalive_task.cancel()
+            try:
+                await keepalive_task
+            except asyncio.CancelledError:
+                pass
+        if keepalive_runner:
+            await keepalive_runner.cleanup()
+
+
 async def run_polling():
+    """وضع polling فقط — للاختبار المحلي"""
     app = build_application()
     await post_init(app)
-    logger.info("🚀 تشغيل البوت في وضع polling...")
+    logger.info("🚀 تشغيل البوت في وضع polling (محلي)...")
     await app.run_polling(
         poll_interval=3,
         drop_pending_updates=True,
@@ -92,6 +145,7 @@ async def run_polling():
 
 
 async def run_webhook():
+    """وضع webhook — احتياطي (غير مفعّل افتراضياً)"""
     app = build_application()
     await post_init(app)
 
@@ -115,9 +169,12 @@ def main():
     logger.info(f"  - الظهيرة: {config.MIDDAY_TIME}")
     logger.info(f"  - المساء: {config.EVENING_TIME}")
     logger.info(f"  - المنطقة الزمنية: {config.DEFAULT_TIMEZONE}")
+    logger.info(f"  - keep-alive: {'مُفعّل' if config.KEEPALIVE_ENABLED else 'مُعطّل'}")
 
-    if config.RENDER_EXTERNAL_URL:
-        asyncio.run(run_webhook())
+    # على Render Free نستخدم polling + keep-alive (الأبسط والأكثر موثوقية)
+    # على localhost نستخدم polling فقط
+    if config.RENDER_EXTERNAL_URL or config.KEEPALIVE_ENABLED:
+        asyncio.run(_run_polling_with_keepalive())
     else:
         asyncio.run(run_polling())
 

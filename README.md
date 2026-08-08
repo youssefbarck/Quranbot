@@ -45,7 +45,7 @@
 - **SQLAlchemy 2.0 + asyncpg** للتعامل مع قاعدة البيانات
 - **Neon Tech (Postgres)** قاعدة بيانات سحابية مجانية
 - **APScheduler** لجدولة التذكيرات
-- **Render** للاستضافة (Background Worker)
+- **Render (Web Service - Free)** للاستضافة مع **keep-alive مدمج** (لا حاجة لمنصة خارجية)
 - **GitHub** للمستودع البرمجي
 
 ## 📂 هيكل المشروع
@@ -107,27 +107,39 @@ git remote add origin https://github.com/USERNAME/quran-husun-bot.git
 git push -u origin main
 ```
 
-### 4️⃣ النشر على Render
+### 4️⃣ النشر على Render (Web Service مجاني)
+
+> ⚠️ **مهم**: اختر **Web Service** (وليس Background Worker — لأن Worker ليس مجانياً على Render).
+> البوت يستخدم **keep-alive مدمج** (خادم HTTP + self-ping كل 280 ثانية) ليبقى مستيقظاً 24/7 على الخطة المجانية دون الحاجة لـ UptimeRobot أو أي منصة خارجية.
 
 1. اذهب إلى [render.com](https://render.com) وسجّل
-2. اختر **New + → Background Worker**
+2. اختر **New + → Web Service**
 3. اربط GitHub واختر المستودع
 4. اترك الإعدادات الافتراضية:
+   - Type: **Web Service**
+   - Environment: **Python 3**
+   - Plan: **Free**
    - Build: `pip install -r requirements.txt`
    - Start: `python -m bot.main`
+   - Health Check Path: `/health`
 5. أضف متغيرات البيئة:
 
 | المتغير | القيمة |
 |---------|--------|
 | `TELEGRAM_BOT_TOKEN` | التوكن من BotFather |
-| `DATABASE_URL` | رابط Neon |
+| `DATABASE_URL` | رابط Neon (postgresql://...) |
 | `ADMIN_TELEGRAM_ID` | معرفك في تلغرام |
 | `MORNING_TIME` | `08:00` |
 | `MIDDAY_TIME` | `13:00` |
 | `EVENING_TIME` | `20:00` |
 | `DEFAULT_TIMEZONE` | `Africa/Algiers` |
+| `KEEPALIVE_ENABLED` | `true` |
+| `KEEPALIVE_INTERVAL` | `280` |
 
-6. اضغط **Create Background Worker** وانتظر دقيقة
+> 📌 **ملاحظة**: Render يضيف متغير `RENDER_EXTERNAL_URL` تلقائياً — لا تضبطه يدوياً.
+
+6. اضغط **Create Web Service** وانتظر دقيقتين حتى يكتمل البناء والإطلاق
+7. في قسم **Logs** يجب أن ترى: `keep-alive نشط — self-ping كل 280 ثانية`
 
 ### 5️⃣ تفعيل البوت
 
