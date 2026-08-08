@@ -592,7 +592,7 @@ def compute_fortresses(user):
 
 
 # ============== 5. المعالجات (الأوامر) ==============
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
 from telegram.constants import ParseMode
 from telegram.ext import (
     Application, ApplicationBuilder, CommandHandler, CallbackQueryHandler,
@@ -615,6 +615,7 @@ def progress_bar(current, total, length=15):
 
 
 def main_menu():
+    """القائمة السياقية (Inline) — تُعرض مع الرسائل."""
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("📋 مهام اليوم", callback_data="today"),
          InlineKeyboardButton("🏰 الحصون", callback_data="fortresses")],
@@ -623,34 +624,96 @@ def main_menu():
     ])
 
 
+def main_keyboard():
+    """لوحة المفاتيح الثابتة في الأسفل (ReplyKeyboard).
+    هذه اللوحة تبقى مرئية دائماً أسفل المحادثة ويمكن للمستخدم الضغط عليها بسرعة.
+    """
+    return ReplyKeyboardMarkup(
+        [
+            [KeyboardButton("📋 مهام اليوم"), KeyboardButton("🏰 الحصون الخمسة")],
+            [KeyboardButton("📊 تقدمي"), KeyboardButton("⚙️ الإعدادات")],
+        ],
+        resize_keyboard=True,
+        is_persistent=True,
+        input_field_placeholder="اختر من القائمة أدناه",
+    )
+
+
+# خريطة النصوص المختصرة من لوحة المفاتيح إلى أوامرها
+KEYBOARD_TEXT_MAP = {
+    "📋 مهام اليوم": "today",
+    "🏰 الحصون الخمسة": "fortresses",
+    "🏰 الحصون": "fortresses",
+    "📊 تقدمي": "progress",
+    "⚙️ الإعدادات": "help",
+    "⚙️ مساعدة": "help",
+}
+
+
 async def start_command(update, context):
     user_info = update.effective_user
     async with AsyncSessionLocal() as session:
         user = await get_or_create_user(session, user_info.id, user_info.username, user_info.full_name)
         needs_onboarding = not user.onboarding_done
-    if needs_onboarding:
-        ONBOARDING_STATE[user_info.id] = "waiting_for_memorization"
-        text = (
-            "🤲 *بسم الله الرحمن الرحيم*\n\n"
-            f"أهلاً *{escape_md(user.full_name or 'أختي الكريمة')}*\\!\n\n"
-            "📖 *بوت الحصون الخمسة لحفظ القرآن*\n\n"
-            "قبل البدء، أخبريني ماذا حفظت سابقاً لأحدد نقطة البداية:\n\n"
-            "• `صفحة 50` — حفظت إلى صفحة 50\n"
-            "• `جزء 3` — حفظت 3 أجزاء\n"
-            "• `سورة الكهف` — حفظت حتى سورة الكهف\n"
-            "• `ختمت القرآن` — حفظت القرآن كاملاً\n"
-            "• `0` — تبدأ من الصفحة الأولى"
-        )
-        await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN_V2)
-    else:
-        await _show_today(update, context)
+        # لو أكملت التهيئة من قبل، نعرض لها لوحة التحكم الثابتة + مهام اليوم
+        if not needs_onboarding:
+            # تفعيل لوحة المفاتيح الثابتة
+            await update.message.reply_text(
+                "👋 *أهلاً بعودتك\\!* إليكِ مهام اليوم:",
+                parse_mode=ParseMode.MARKDOWN_V2,
+                reply_markup=main_keyboard(),
+            )
+            await _show_today(update, context)
+            return
+
+    ONBOARDING_STATE[user_info.id] = "waiting_for_memorization"
+    text = (
+        "🤲 *بسم الله الرحمن الرحيم*\n\n"
+        f"أهلاً *{escape_md(user.full_name or 'أختي الكريمة')}*\\!\n\n"
+        "📖 *بوت الحصون الخمسة لحفظ القرآن*\n\n"
+        "━━━━━━━━━━━━━━━━\n\n"
+        "❓ *ما هي آخر صفحة حفظتها من القرآن؟*\n\n"
+        "أجيبيني بصيغة من الصيغ التالية لأبدأ حساب الحصون:\n\n"
+        "• `صفحة 127` — آخر صفحة حفظتها هي 127\n"
+        "• `سورة المائدة` — حفظت حتى نهاية سورة المائدة\n"
+        "• `جزء 7` — حفظت 7 أجزاء\n"
+        "• `ختمت القرآن` — حفظت القرآن كاملاً\n"
+        "• `0` — لم أحفظ شيئاً بعد، ابدأ من الصفحة 1\n\n"
+        "━━━━━━━━━━━━━━━━\n"
+        "💡 بعد إجابتك سأحسب لكِ:\n"
+        "  🔄 مراجعة القريب \\(آخر 20 صفحة\\)\n"
+        "  🛡️ مراجعة البعيد \\(آخر 40 صفحة\\)\n"
+        "  🆕 الحفظ الجديد"
+    )
+    await update.message.reply_text(
+        text,
+        parse_mode=ParseMode.MARKDOWN_V2,
+        reply_markup=main_keyboard(),
+    )
 
 
 async def handle_free_text(update, context):
     user_id = update.effective_user.id
-    if ONBOARDING_STATE.get(user_id) != "waiting_for_memorization":
-        return
     text = update.message.text.strip()
+
+    # لو النص يطابق أحد أزرار لوحة المفاتيح الثابتة — نُحوّله إلى الأمر المناسب
+    if text in KEYBOARD_TEXT_MAP:
+        command = KEYBOARD_TEXT_MAP[text]
+        if command == "today":
+            await _show_today(update, context)
+        elif command == "fortresses":
+            await fortresses_command(update, context)
+        elif command == "progress":
+            await progress_command(update, context)
+        elif command == "help":
+            await help_command(update, context)
+        return
+
+    # لو المستخدم في وضع التهيئة — نعالج إجابته
+    if ONBOARDING_STATE.get(user_id) != "waiting_for_memorization":
+        # نص حر غير مرتبط بأمر — نتجاهل بهدوء
+        return
+
     async with AsyncSessionLocal() as session:
         user = await get_or_create_user(session, telegram_id=user_id)
         parsed = await parse_memorization_input(text)
@@ -658,6 +721,7 @@ async def handle_free_text(update, context):
             await update.message.reply_text(
                 "❌ لم أفهم\\! جرّب:\n• `صفحة 50`\n• `جزء 3`\n• `سورة الكهف`\n• `ختمت القرآن`\n• `0`",
                 parse_mode=ParseMode.MARKDOWN_V2,
+                reply_markup=main_keyboard(),
             )
             return
         page = parsed["page"] or 0
@@ -670,26 +734,36 @@ async def handle_free_text(update, context):
             await session.commit()
             del ONBOARDING_STATE[user_id]
             await update.message.reply_text(
-                "✅ *تمّ الضبط\\!*\n📖 ستبدئين من *الصفحة 1* \\(الفاتحة\\)\nاكتبي /today لمهامك",
-                parse_mode=ParseMode.MARKDOWN_V2, reply_markup=main_menu(),
+                "✅ *تمّ الضبط\\!*\n📖 ستبدئين من *الصفحة 1* \\(الفاتحة\\)\n\n"
+                "اضغطي *📋 مهام اليوم* في الأسفل لمهامك",
+                parse_mode=ParseMode.MARKDOWN_V2,
+                reply_markup=main_keyboard(),
             )
         else:
-            # تمرير first_page لدعم حفظ نطاق محدد (مثلاً: المائدة من 106 إلى 127)
+            # تمرير first_page لدعم حفظ نطاق محدد
             await set_memorized_up_to(session, user, page, first_page=parsed.get("first_page"))
             del ONBOARDING_STATE[user_id]
             first_p = parsed.get("first_page") or 1
-            next_page = page + 1 if page < quran_data.TOTAL_PAGES else page
-            surah = quran_data.page_to_surah(next_page)
+            # نُريها الحسابات فوراً
+            await session.refresh(user)
+            f = compute_fortresses(user)
+            last_surah = quran_data.page_to_surah(f["last_memorized_page"])
+            next_surah = quran_data.page_to_surah(f["next_memorize_page"])
             if first_p > 1:
                 range_msg = f"من *الصفحة {first_p}* إلى *الصفحة {page}*"
             else:
-                range_msg = f"حتى *الصفحة {page}*"
+                range_msg = f"حتى *الصفحة {page}* \\(سورة {escape_md(last_surah.name_ar)}\\)"
             await update.message.reply_text(
-                f"✅ *ما شاء الله\\!* سجّلت أنك حفظتِ {range_msg}\n"
-                f"📖 صفحتك التالية: *{next_page}* \\— سورة {escape_md(surah.name_ar)}\n\n"
-                f"🌅 الصباح 08:00: قراءة حزبين\n☀️ الظهيرة 13:00: استماع حزب\n🌙 المساء 20:00: سؤال تفاعلي\n\n"
-                f"اكتبي /today",
-                parse_mode=ParseMode.MARKDOWN_V2, reply_markup=main_menu(),
+                f"✅ *ما شاء الله\\!* سجّلت أنك حفظتِ {range_msg}\n\n"
+                "━━━━━━━━━━━━━━━━\n"
+                "📊 *حسابات الحصون الخمسة:*\n\n"
+                f"🆕 الحفظ الجديد: صفحة *{f['next_memorize_page']}* \\— سورة {escape_md(next_surah.name_ar)}\n"
+                f"🔄 مراجعة القريب \\(آخر 20 صفحة\\): {f['near_start']}–{f['near_end']}\n"
+                f"🛡️ مراجعة البعيد \\(آخر 40 صفحة\\): {f['far_start']}–{f['far_end']}\n"
+                "━━━━━━━━━━━━━━━━\n\n"
+                "اضغطي *📋 مهام اليوم* في الأسفل لمهامك",
+                parse_mode=ParseMode.MARKDOWN_V2,
+                reply_markup=main_keyboard(),
             )
 
 
@@ -728,9 +802,11 @@ async def _show_today(update, context):
         )
     text += "💡 `/markdone reading|listening|memorize`"
     if update.message:
-        await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN_V2, reply_markup=main_menu(), disable_web_page_preview=True)
+        await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN_V2,
+                                       reply_markup=main_keyboard(), disable_web_page_preview=True)
     elif update.callback_query:
-        await update.callback_query.edit_message_text(text, parse_mode=ParseMode.MARKDOWN_V2, reply_markup=main_menu(), disable_web_page_preview=True)
+        await update.callback_query.edit_message_text(text, parse_mode=ParseMode.MARKDOWN_V2,
+                                                       reply_markup=main_menu(), disable_web_page_preview=True)
 
 
 async def today_command(update, context):
@@ -815,7 +891,7 @@ async def fortresses_command(update, context):
 
     if update.message:
         await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN_V2,
-                                        reply_markup=main_menu(), disable_web_page_preview=True)
+                                        reply_markup=main_keyboard(), disable_web_page_preview=True)
     elif update.callback_query:
         await update.callback_query.edit_message_text(text, parse_mode=ParseMode.MARKDOWN_V2,
                                                        reply_markup=main_menu(), disable_web_page_preview=True)
@@ -845,14 +921,20 @@ async def progress_command(update, context):
     if recent_text:
         text += f"📋 *آخر 5 صفحات:*\n{recent_text}"
     if update.message:
-        await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN_V2)
+        await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN_V2,
+                                        reply_markup=main_keyboard())
     elif update.callback_query:
         await update.callback_query.edit_message_text(text, parse_mode=ParseMode.MARKDOWN_V2, reply_markup=main_menu())
 
 
 async def setpage_command(update, context):
+    """يحدّث صفحة الحفظ الحالية ويُعيد حساب الحصون."""
     if not context.args:
-        await update.message.reply_text("❌ استخدمي: `/setpage 25`", parse_mode=ParseMode.MARKDOWN_V2)
+        await update.message.reply_text(
+            "❌ استخدمي: `/setpage 25`",
+            parse_mode=ParseMode.MARKDOWN_V2,
+            reply_markup=main_keyboard(),
+        )
         return
     try:
         page = int(context.args[0])
@@ -866,12 +948,79 @@ async def setpage_command(update, context):
         user = await get_or_create_user(session, update.effective_user.id)
         user.current_page = page
         user.onboarding_done = True
+        # إن كان page أكبر من آخر محفوظ — نُحدّث last_memorized_page
+        if page > getattr(user, "last_memorized_page", 0):
+            user.last_memorized_page = max(1, page - 1)
         await session.commit()
+        await session.refresh(user)
+        f = compute_fortresses(user)
     surah = quran_data.page_to_surah(page)
     await update.message.reply_text(
-        f"✅ صفحتك الحالية: *{page}*\n📖 السورة: {surah.name_ar}",
+        f"✅ صفحتك الحالية: *{page}*\n📖 السورة: {escape_md(surah.name_ar)}\n\n"
+        f"🔄 مراجعة القريب: {f['near_start']}–{f['near_end']}\n"
+        f"🛡️ مراجعة البعيد: {f['far_start']}–{f['far_end']}",
         parse_mode=ParseMode.MARKDOWN_V2,
+        reply_markup=main_keyboard(),
     )
+
+
+async def update_command(update, context):
+    """يُعيد تحديث آخر صفحة محفوظة ثم يُعيد حساب الحصون.
+
+    يدعم نفس صيغ /start: صفحة X، سورة Y، جزء Z، ختمت القرآن، 0.
+    مثال: /update سورة المائدة
+    """
+    if not context.args:
+        await update.message.reply_text(
+            "❓ *تحديث آخر صفحة محفوظة*\n\n"
+            "استخدمي:\n"
+            "• `/update صفحة 127`\n"
+            "• `/update سورة المائدة`\n"
+            "• `/update جزء 7`\n"
+            "• `/update ختمت القرآن`\n"
+            "• `/update 0` \\(إعادة من البداية\\)",
+            parse_mode=ParseMode.MARKDOWN_V2,
+            reply_markup=main_keyboard(),
+        )
+        return
+    text = " ".join(context.args)
+    parsed = await parse_memorization_input(text)
+    if parsed["page"] is None and "0" not in text:
+        await update.message.reply_text(
+            "❌ لم أفهم\\! جرّب: `/update سورة المائدة`",
+            parse_mode=ParseMode.MARKDOWN_V2,
+        )
+        return
+    page = parsed["page"] or 0
+    async with AsyncSessionLocal() as session:
+        user = await get_or_create_user(session, update.effective_user.id)
+        if page == 0:
+            user.current_page = 1
+            user.start_page = 1
+            user.last_memorized_page = 0
+            user.total_memorized = 0
+            user.onboarding_done = True
+            await session.execute(Memorization.__table__.delete().where(Memorization.user_id == user.id))
+            await session.commit()
+            await update.message.reply_text(
+                "✅ *تمّت الإعادة من البداية*\n📖 ستبدئين من الصفحة 1",
+                parse_mode=ParseMode.MARKDOWN_V2,
+                reply_markup=main_keyboard(),
+            )
+        else:
+            await set_memorized_up_to(session, user, page, first_page=parsed.get("first_page"))
+            await session.refresh(user)
+            f = compute_fortresses(user)
+            last_surah = quran_data.page_to_surah(f["last_memorized_page"])
+            await update.message.reply_text(
+                f"✅ *تمّ التحديث\\!* آخر صفحة محفوظة: *{f['last_memorized_page']}* \\(سورة {escape_md(last_surah.name_ar)}\\)\n\n"
+                "📊 *الحصون بعد التحديث:*\n"
+                f"🆕 الحفظ الجديد: صفحة *{f['next_memorize_page']}*\n"
+                f"🔄 مراجعة القريب: {f['near_start']}–{f['near_end']}\n"
+                f"🛡️ مراجعة البعيد: {f['far_start']}–{f['far_end']}",
+                parse_mode=ParseMode.MARKDOWN_V2,
+                reply_markup=main_keyboard(),
+            )
 
 
 async def markdone_command(update, context):
@@ -996,14 +1145,17 @@ async def help_command(update, context):
         "/today — مهام اليوم\n"
         "/fortresses — الحصون\n"
         "/progress — تقدمك\n"
+        "/update <صفحة X|سورة Y|جزء Z> — تحديث آخر صفحة محفوظة وإعادة حساب الحصون\n"
         "/setpage <رقم>\n"
         "/settime <morning|midday|evening> <HH:MM>\n"
         "/timezone <region>\n"
         "/markdone <reading|listening|memorize|daily_review|weekly <page>>\n"
         "/reset — إعادة التهيئة\n"
-        "/help — هذا الدليل"
+        "/help — هذا الدليل\n\n"
+        "💡 *استخدمي الأزرار في الأسفل للتنقل السريع*"
     )
-    await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN_V2)
+    await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN_V2,
+                                    reply_markup=main_keyboard())
 
 
 async def button_callback(update, context):
@@ -1304,15 +1456,36 @@ async def post_shutdown(app):
 
 
 async def _error_handler(update, context):
-    """معالج أخطاء شامل لمنع توقّف البوت عن الاستجابة عند خطأ Markdown أو غيره."""
+    """معالج أخطاء شامل لمنع توقّف البوت عن الاستجابة.
+
+    ملاحظة مهمة: لا نُرسل رسالة للمستخدم عند الأخطاء العابرة:
+    - Conflict (409): تعارض بين مثيلين من البوت (يحدث عند النشر/إعادة النشر)
+    - NetworkError/TimedOut: مشاكل شبكة عابرة
+    هذه الأخطاء لا تتعلق بفعل المستخدم، فلا داعي لإزعاجه برسائل خطأ.
+    """
+    from telegram.error import Conflict, NetworkError, TimedOut, Forbidden
     error = context.error
-    logger.error(f"❌ خطأ أثناء معالجة تحديث: {type(error).__name__}: {error}")
+
+    # أخطاء عابرة — نتجاهلها بصمت (لا إزعاج للمستخدم)
+    if isinstance(error, (Conflict, TimedOut)):
+        logger.warning(f"⚠️ خطأ عابر (تجاهل صامت): {type(error).__name__}: {error}")
+        return
+    if isinstance(error, NetworkError) and not isinstance(error, TimedOut):
+        logger.warning(f"⚠️ خطأ شبكة (تجاهل صامت): {error}")
+        return
+    if isinstance(error, Forbidden):
+        # المستخدم حظر البوت — لا يمكننا إرسال شيء على أي حال
+        logger.warning(f"⚠️ المستخدم حظر البوت: {error}")
+        return
+
+    # أخطاء حقيقية (Markdown، قاعدة بيانات، إلخ) — نُسجّلها
+    logger.error(f"❌ خطأ أثناء معالجة تحديث: {type(error).__name__}: {error}", exc_info=True)
     # محاولة إرسال رسالة بسيطة للمستخدم بدلاً من الصمت
     try:
         if update and getattr(update, "effective_chat", None):
             await context.bot.send_message(
                 chat_id=update.effective_chat.id,
-                text="⚠️ حدث خطأ بسيط أثناء تجهيز الرد\\. جرّبي مرة أخرى أو اكتبي /start\\.",
+                text="⚠️ حدث خطأ بسيط أثناء تجهيز الرد\\. جرّبي مرة أخرى\\.",
                 parse_mode=ParseMode.MARKDOWN_V2,
             )
     except Exception:
@@ -1336,6 +1509,7 @@ def build_application():
     app.add_handler(CommandHandler("fortresses", fortresses_command))
     app.add_handler(CommandHandler("progress", progress_command))
     app.add_handler(CommandHandler("setpage", setpage_command))
+    app.add_handler(CommandHandler("update", update_command))
     app.add_handler(CommandHandler("markdone", markdone_command))
     app.add_handler(CommandHandler("settime", settime_command))
     app.add_handler(CommandHandler("timezone", timezone_command))
