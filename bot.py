@@ -57,20 +57,25 @@ class Base(DeclarativeBase):
     pass
 
 
-def _strip_sslmode(url: str) -> str:
-    """إزالة معامل sslmode من رابط PostgreSQL لأن asyncpg لا يقبله."""
+# معاملات libpq/psycopg2 التي لا يقبّلها asyncpg في رابط الاتصال
+_ASYNCPG_FORBIDDEN_PARAMS = {"sslmode", "channel_binding", "sslrootcert", "sslcert", "sslkey"}
+
+
+def _strip_forbidden_params(url: str) -> str:
+    """إزالة معاملات libpg التي لا يقبّلها asyncpg (sslmode, channel_binding, ...)."""
     if not url.startswith("postgresql://"):
         return url
     parsed = urlparse(url)
     query = dict(parse_qsl(parsed.query))
-    query.pop("sslmode", None)
+    for key in _ASYNCPG_FORBIDDEN_PARAMS:
+        query.pop(key, None)
     new_query = urlencode(query)
     return urlunparse(parsed._replace(query=new_query))
 
 
 def _to_async_url(url: str) -> str:
     if url.startswith("postgresql://"):
-        url = _strip_sslmode(url)
+        url = _strip_forbidden_params(url)
         return url.replace("postgresql://", "postgresql+asyncpg://", 1)
     if url.startswith("file:"):
         url = url.replace("file:", "sqlite:///", 1)
@@ -88,6 +93,7 @@ if _is_postgres:
     _engine_kwargs["pool_size"] = 5
     _engine_kwargs["max_overflow"] = 10
     # asyncpg يتلقّى SSL عبر connect_args وليس عبر رابط الاتصال
+    # ssl=True يجعل asyncpg يتحقّق من شهادة SSL باستخدام hostname من الرابط
     _engine_kwargs["connect_args"] = {"ssl": True}
 
 engine = create_async_engine(_to_async_url(DATABASE_URL), **_engine_kwargs)
