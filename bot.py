@@ -19,10 +19,10 @@ from urllib.parse import urlparse, urlunparse, parse_qsl, urlencode
 from dotenv import load_dotenv
 load_dotenv()
 
-BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
-DATABASE_URL = os.getenv("DATABASE_URL", "").replace("postgres://", "postgresql://")
-# ملاحظة: asyncpg لا يقبل معامل sslmode في رابط الاتصال (هذا خاص بـ psycopg2).
-# لذلك نخطّي sslmode من الرابط ونمرّر SSL عبر connect_args لاحقًا.
+BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+# تنظيف المسافات البيضاء في البداية والنهاية (Render يضيفها أحياناً عند اللصق)
+_raw_db = os.getenv("DATABASE_URL", "").strip()
+DATABASE_URL = _raw_db.replace("postgres://", "postgresql://")
 ADMIN_ID = int(os.getenv("ADMIN_TELEGRAM_ID", "0") or "0")
 
 MORNING_TIME = os.getenv("MORNING_TIME", "08:00")
@@ -88,13 +88,46 @@ def _to_async_url(url: str) -> str:
 
 _is_postgres = DATABASE_URL.startswith("postgresql://")
 
-# فحص مبكّر: إذا لم يُضبط DATABASE_URL، اطبع رسالة واضحة واخرج
+# طباعة تشخيصية: اطبع قيمة DATABASE_URL مع إخفاء كلمة المرور
+def _mask_url(url: str) -> str:
+    """إخفاء كلمة المرور في الرابط لأغراض التشخيص فقط."""
+    if "://" in url:
+        scheme, rest = url.split("://", 1)
+        if "@" in rest:
+            creds, host_part = rest.split("@", 1)
+            if ":" in creds:
+                user, _pw = creds.split(":", 1)
+                return f"{scheme}://{user}:****@{host_part}"
+            return f"{scheme}://****@{host_part}"
+        return f"{scheme}://{rest}"
+    return url
+
+# رسالة تشخيصية واضحة جداً تُطبع فوراً عند الإقلاع
+print("=" * 70, flush=True)
+print(f"[DEBUG] DATABASE_URL raw length: {len(_raw_db)}", flush=True)
+print(f"[DEBUG] DATABASE_URL (masked): {_mask_url(DATABASE_URL) if DATABASE_URL else '(empty)'}", flush=True)
+print(f"[DEBUG] DATABASE_URL starts with postgresql:// : {_is_postgres}", flush=True)
+print(f"[DEBUG] TELEGRAM_BOT_TOKEN set: {bool(BOT_TOKEN)}", flush=True)
+print(f"[DEBUG] ADMIN_TELEGRAM_ID: {ADMIN_ID}", flush=True)
+print("=" * 70, flush=True)
+sys.stdout.flush()
+
+# فحص مبكّر: إذا لم يُضبط DATABASE_URL أو لم يكن postgresql://، اطبع رسالة واضحة واخرج
 if not DATABASE_URL:
-    print("=" * 60, flush=True)
+    print("=" * 70, flush=True)
     print("❌ خطأ: متغيّر البيئة DATABASE_URL غير مضبوط!", flush=True)
     print("   اذهب إلى Render → Environment → أضف:", flush=True)
     print("   DATABASE_URL = postgresql://user:pass@host/dbname", flush=True)
-    print("=" * 60, flush=True)
+    print("=" * 70, flush=True)
+    sys.exit(1)
+
+if not _is_postgres:
+    print("=" * 70, flush=True)
+    print(f"❌ خطأ: DATABASE_URL يجب أن يبدأ بـ postgresql://", flush=True)
+    print(f"   القيمة الحالية (masked): {_mask_url(DATABASE_URL)}", flush=True)
+    print(f"   الطول: {len(DATABASE_URL)} حرف", flush=True)
+    print("   الحل: اذهب إلى Render → Environment → عدّل DATABASE_URL", flush=True)
+    print("=" * 70, flush=True)
     sys.exit(1)
 
 _engine_kwargs = {"echo": False}
@@ -1056,6 +1089,7 @@ def build_application():
 
 
 async def post_init(app):
+    """يُستدعى داخل event loop الخاص بـ PTB بعد إنشاء التطبيق."""
     logger.info("🔧 تهيئة قاعدة البيانات...")
     await init_db()
     logger.info("✅ قاعدة البيانات جاهزة")
@@ -1063,36 +1097,70 @@ async def post_init(app):
     start_scheduler(app.bot)
     asyncio.create_task(_periodic_reschedule(app.bot))
 
-
-async def _run_polling_with_keepalive():
-    app = build_application()
-    keepalive_runner = None
-    keepalive_task = None
+    # تشغيل خادم keep-alive داخل نفس event loop (إذا كان مفعّلاً)
     if KEEPALIVE_ENABLED:
         public_url = f"{RENDER_EXTERNAL_URL}/health" if RENDER_EXTERNAL_URL else ""
         logger.info(f"🌐 بدء خادم keep-alive على المنفذ {PORT}...")
-        keepalive_runner, keepalive_task = await start_keepalive_server(
-            port=PORT, public_health_url=public_url, keepalive_interval=KEEPALIVE_INTERVAL,
-        )
-        if public_url:
-            logger.info(f"✅ keep-alive نشط — self-ping كل {KEEPALIVE_INTERVAL} ثانية")
-        else:
-            logger.warning("⚠️ RENDER_EXTERNAL_URL غير مضبوط — الخدمة قد تنام")
-    await post_init(app)
-    logger.info("🚀 تشغيل البوت في وضع polling...")
-    try:
-        await app.run_polling(poll_interval=3, drop_pending_updates=True, close_loop=False)
-    finally:
-        if keepalive_task:
-            keepalive_task.cancel()
-            try: await keepalive_task
-            except asyncio.CancelledError: pass
-        if keepalive_runner:
-            await keepalive_runner.cleanup()
+        try:
+            runner, keepalive_task = await start_keepalive_server(
+                port=PORT, public_health_url=public_url, keepalive_interval=KEEPALIVE_INTERVAL,
+            )
+            # نخزّنها كسمات على app حتى ننظّفها لاحقاً
+            app._keepalive_runner = runner
+            app._keepalive_task = keepalive_task
+            if public_url:
+                logger.info(f"✅ keep-alive نشط — self-ping كل {KEEPALIVE_INTERVAL} ثانية")
+            else:
+                logger.warning("⚠️ RENDER_EXTERNAL_URL غير مضبوط — الخدمة قد تنام")
+        except Exception as e:
+            logger.warning(f"⚠️ تعذّر بدء خادم keep-alive: {e} — يُتابع البوت بدون keep-alive")
+
+
+async def post_shutdown(app):
+    """ينظّف خادم keep-alive عند التوقف."""
+    task = getattr(app, "_keepalive_task", None)
+    runner = getattr(app, "_keepalive_runner", None)
+    if task:
+        task.cancel()
+        try:
+            await task
+        except (asyncio.CancelledError, Exception):
+            pass
+    if runner:
+        await runner.cleanup()
+
+
+# ============== 8. نقطة التشغيل ==============
+
+def build_application():
+    if not BOT_TOKEN:
+        logger.error("❌ TELEGRAM_BOT_TOKEN غير مضبوط"); sys.exit(1)
+    app = (
+        ApplicationBuilder()
+        .token(BOT_TOKEN)
+        .post_init(post_init)
+        .post_shutdown(post_shutdown)
+        .build()
+    )
+    app.add_handler(CommandHandler("start", start_command))
+    app.add_handler(CommandHandler("help", help_command))
+    app.add_handler(CommandHandler("today", today_command))
+    app.add_handler(CommandHandler("fortresses", fortresses_command))
+    app.add_handler(CommandHandler("progress", progress_command))
+    app.add_handler(CommandHandler("setpage", setpage_command))
+    app.add_handler(CommandHandler("markdone", markdone_command))
+    app.add_handler(CommandHandler("settime", settime_command))
+    app.add_handler(CommandHandler("timezone", timezone_command))
+    app.add_handler(CommandHandler("reset", reset_command))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_free_text))
+    app.add_handler(CallbackQueryHandler(button_callback, pattern="^(today|fortresses|progress|settings)$"))
+    app.add_handler(CallbackQueryHandler(evening_yes_callback, pattern="^evening_yes$"))
+    app.add_handler(CallbackQueryHandler(evening_later_callback, pattern="^evening_later$"))
+    return app
 
 
 def main():
-    # التقاط أي استثناء وطباعته بالكامل (Render يخفي stderr أحياناً)
+    """نقطة التشغيل الرئيسية — تستخدم run_polling المتزامنة الخاصة بـ PTB."""
     import traceback
     try:
         logger.info("📖 بوت الحصون الخمسة — البدء")
@@ -1104,17 +1172,15 @@ def main():
         logger.info(f"  - DATABASE_URL يبدأ بـ postgresql: {_is_postgres}")
         logger.info(f"  - BOT_TOKEN مضبوط: {bool(BOT_TOKEN)}")
         logger.info(f"  - ADMIN_ID: {ADMIN_ID}")
-        if RENDER_EXTERNAL_URL or KEEPALIVE_ENABLED:
-            asyncio.run(_run_polling_with_keepalive())
-        else:
-            app = build_application()
-            asyncio.run(post_init(app))
-            logger.info("🚀 تشغيل البوت في وضع polling (محلي)...")
-            asyncio.run(app.run_polling(poll_interval=3, drop_pending_updates=True, close_loop=False))
+
+        app = build_application()
+        logger.info("🚀 تشغيل البوت في وضع polling...")
+        # run_polling() متزامنة وتدير event loop الخاص بها
+        # post_init سيُستدعى تلقائياً داخل الـ loop لبدء keep-alive والمجدول
+        app.run_polling(poll_interval=3, drop_pending_updates=True, close_loop=False)
     except Exception as e:
         logger.error("❌ خطأ أثناء التشغيل:")
         logger.error(traceback.format_exc())
-        # أعد الطبع إلى stdout أيضاً حتى يظهر في سجلّات Render
         print("❌ ERROR:", e, flush=True)
         traceback.print_exc()
         sys.stdout.flush()
