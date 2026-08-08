@@ -14,14 +14,15 @@ import asyncio
 import logging
 import re
 from datetime import date, timedelta
+from urllib.parse import urlparse, urlunparse, parse_qsl, urlencode
 
 from dotenv import load_dotenv
 load_dotenv()
 
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 DATABASE_URL = os.getenv("DATABASE_URL", "").replace("postgres://", "postgresql://")
-if DATABASE_URL and DATABASE_URL.startswith("postgresql://") and "sslmode" not in DATABASE_URL:
-    DATABASE_URL += "?sslmode=require"
+# ملاحظة: asyncpg لا يقبل معامل sslmode في رابط الاتصال (هذا خاص بـ psycopg2).
+# لذلك نخطّي sslmode من الرابط ونمرّر SSL عبر connect_args لاحقًا.
 ADMIN_ID = int(os.getenv("ADMIN_TELEGRAM_ID", "0") or "0")
 
 MORNING_TIME = os.getenv("MORNING_TIME", "08:00")
@@ -56,8 +57,20 @@ class Base(DeclarativeBase):
     pass
 
 
+def _strip_sslmode(url: str) -> str:
+    """إزالة معامل sslmode من رابط PostgreSQL لأن asyncpg لا يقبله."""
+    if not url.startswith("postgresql://"):
+        return url
+    parsed = urlparse(url)
+    query = dict(parse_qsl(parsed.query))
+    query.pop("sslmode", None)
+    new_query = urlencode(query)
+    return urlunparse(parsed._replace(query=new_query))
+
+
 def _to_async_url(url: str) -> str:
     if url.startswith("postgresql://"):
+        url = _strip_sslmode(url)
         return url.replace("postgresql://", "postgresql+asyncpg://", 1)
     if url.startswith("file:"):
         url = url.replace("file:", "sqlite:///", 1)
@@ -74,6 +87,8 @@ if _is_postgres:
     _engine_kwargs["pool_pre_ping"] = True
     _engine_kwargs["pool_size"] = 5
     _engine_kwargs["max_overflow"] = 10
+    # asyncpg يتلقّى SSL عبر connect_args وليس عبر رابط الاتصال
+    _engine_kwargs["connect_args"] = {"ssl": True}
 
 engine = create_async_engine(_to_async_url(DATABASE_URL), **_engine_kwargs)
 AsyncSessionLocal = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
