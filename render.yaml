@@ -5,6 +5,8 @@ services:
     region: frankfurt
     plan: free
     branch: main
+    # rootDir: اتركه "." إذا كانت ملفاتك في جذر المستودع
+    # أو اضبطه على "quran-bot" إذا كانت ملفاتك داخل مجلد quran-bot/ في المستودع
     rootDir: .
     buildCommand: pip install -r requirements.txt
     startCommand: python -m bot.main
