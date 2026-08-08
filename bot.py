@@ -45,7 +45,7 @@ logger = logging.getLogger(__name__)
 # ============== 2. قاعدة البيانات ==============
 from sqlalchemy import (
     BigInteger, Date, DateTime, ForeignKey, Integer, String, Boolean,
-    func, UniqueConstraint, select, and_
+    func, UniqueConstraint, select, and_, text
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from sqlalchemy.ext.asyncio import (
@@ -153,6 +153,9 @@ class User(Base):
     full_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
     current_page: Mapped[int] = mapped_column(Integer, default=1)
     start_page: Mapped[int] = mapped_column(Integer, default=1)
+    # آخر صفحة محفوظة فعلياً (تخزين صريح، لا يعتمد على current_page - 1)
+    # هذا يحمي من خطأ edge case عند نهاية المصحف (صفحة 604)
+    last_memorized_page: Mapped[int] = mapped_column(Integer, default=0)
     total_memorized: Mapped[int] = mapped_column(Integer, default=0)
     onboarding_done: Mapped[bool] = mapped_column(Boolean, default=False)
     timezone: Mapped[str] = mapped_column(String(64), default="Africa/Algiers")
@@ -231,6 +234,19 @@ class DailyProgress(Base):
 async def init_db():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        # إضافة عمود last_memorized_page للقواعد الموجودة (create_all لا يعدّل الجداول القائمة)
+        if _is_postgres:
+            try:
+                await conn.execute(text(
+                    "ALTER TABLE users ADD COLUMN IF NOT EXISTS last_memorized_page INTEGER DEFAULT 0"
+                ))
+                # تهيئة last_memorized_page من current_page - 1 للمستخدمين القدامى
+                await conn.execute(text(
+                    "UPDATE users SET last_memorized_page = GREATEST(0, current_page - 1) "
+                    "WHERE last_memorized_page = 0 AND current_page > 1"
+                ))
+            except Exception as e:
+                logger.warning(f"تعذّر إضافة/تهيئة عمود last_memorized_page: {e}")
 
 
 # ============== 4. المنطق ==============
@@ -254,16 +270,21 @@ async def get_or_create_user(session, telegram_id, username=None, full_name=None
 
 async def parse_memorization_input(text):
     text = text.strip()
-    result = {"type": None, "value": None, "page": None, "raw": text}
+    # الحقل الجديد: first_page = أول صفحة محفوظة فعلياً (افتراضياً = page)
+    # last_page = آخر صفحة محفوظة فعلياً
+    result = {"type": None, "value": None, "page": None,
+              "first_page": None, "last_page": None, "raw": text}
     if "كل القرآن" in text or "كامل القرآن" in text or "ختمت" in text:
-        result.update({"type": "all", "value": "all", "page": quran_data.TOTAL_PAGES})
+        result.update({"type": "all", "value": "all", "page": quran_data.TOTAL_PAGES,
+                       "first_page": 1, "last_page": quran_data.TOTAL_PAGES})
         return result
     m = re.search(r"جزء\s*(\d+)", text)
     if m:
         juz = int(m.group(1))
         if 1 <= juz <= 30:
             start, end = quran_data.juz_pages(juz)
-            result.update({"type": "juz", "value": juz, "page": end})
+            result.update({"type": "juz", "value": juz, "page": end,
+                           "first_page": start, "last_page": end})
             return result
     m = re.search(r"سورة\s+(.+)", text)
     if m:
@@ -273,37 +294,63 @@ async def parse_memorization_input(text):
                 last_page = quran_data.get_surah_by_number(surah.number + 1).page_start - 1
             else:
                 last_page = quran_data.TOTAL_PAGES
-            result.update({"type": "surah", "value": surah.name_ar, "page": last_page})
+            # المنهجية: اسم السورة يحدّد only آخر صفحة محفوظة (last_page)،
+            # أما first_page فيبقى 1 (المستخدم حفظ من البداية حتى نهاية هذه السورة).
+            # هذا يضمن أن مراجعة البعيد تكون "آخر 40 صفحة فعلية" وليس من بداية السورة.
+            # مثال: "حافظة سورة المائدة" → last_page=127, first_page=1
+            #   → الحصن الرابع: 108→127، الحصن الخامس: 88→127
+            result.update({"type": "surah", "value": surah.name_ar, "page": last_page,
+                           "first_page": 1, "last_page": last_page})
             return result
     m = re.search(r"صفحة\s*(\d+)\s*[-–]\s*(\d+)", text)
     if m:
         start_p, end_p = int(m.group(1)), int(m.group(2))
-        if 1 <= end_p <= quran_data.TOTAL_PAGES:
-            result.update({"type": "page_range", "value": (start_p, end_p), "page": end_p})
+        if 1 <= end_p <= quran_data.TOTAL_PAGES and 1 <= start_p <= end_p:
+            result.update({"type": "page_range", "value": (start_p, end_p), "page": end_p,
+                           "first_page": start_p, "last_page": end_p})
             return result
     m = re.search(r"صفحة\s*(\d+)", text)
     if m:
         p = int(m.group(1))
         if 1 <= p <= quran_data.TOTAL_PAGES:
-            result.update({"type": "page", "value": p, "page": p})
+            # حفظ صفحة واحدة فقط: first = last = p
+            result.update({"type": "page", "value": p, "page": p,
+                           "first_page": p, "last_page": p})
             return result
     m = re.match(r"^\s*(\d+)\s*$", text)
     if m:
         p = int(m.group(1))
         if 1 <= p <= quran_data.TOTAL_PAGES:
-            result.update({"type": "page", "value": p, "page": p})
+            result.update({"type": "page", "value": p, "page": p,
+                           "first_page": p, "last_page": p})
             return result
     return result
 
 
-async def set_memorized_up_to(session, user, page):
+async def set_memorized_up_to(session, user, page, first_page=None):
+    """يسجّل أن المستخدم حفظ نطاقاً من first_page إلى page (شامل).
+
+    - إذا لم يُحدد first_page، يُفترض أن الحفظ من الصفحة 1 (متوافق مع السلوك القديم).
+    - يحفظ فقط صفحات النطاق [first_page, page] في جدول Memorization (وليس 1..page).
+    - يحدّث user.start_page و user.current_page و user.last_memorized_page و user.total_memorized.
+    """
+    # حماية القيم
+    page = max(1, min(int(page), quran_data.TOTAL_PAGES))
+    if first_page is None:
+        first_page = 1
+    first_page = max(1, min(int(first_page), page))
+
+    # إفراغ السجلات القديمة لهذا المستخدم
     await session.execute(Memorization.__table__.delete().where(Memorization.user_id == user.id))
     today = date.today()
-    for p in range(1, page + 1):
+    # تسجيل صفحات النطاق [first_page, page] فقط
+    for p in range(first_page, page + 1):
         session.add(Memorization(user_id=user.id, page_number=p, date_memorized=today, review_count=5))
+    # الصفحة التالية للحفظ الجديد (لا نتجاوز TOTAL_PAGES + 1 منطقياً، لكن نبقي current_page ضمن النطاق)
     user.current_page = page + 1 if page < quran_data.TOTAL_PAGES else quran_data.TOTAL_PAGES
-    user.start_page = 1
-    user.total_memorized = page
+    user.start_page = first_page
+    user.last_memorized_page = page  # تخزين صريح
+    user.total_memorized = page - first_page + 1
     user.onboarding_done = True
     await session.commit()
 
@@ -324,6 +371,12 @@ async def mark_memorized(session, user, page):
     else:
         memo.date_memorized = date.today()
         memo.review_count = 0
+    # توسيع النطاق المحفوظ إن لزم
+    if page < user.start_page:
+        user.start_page = page
+    current_last = getattr(user, "last_memorized_page", 0) or 0
+    if page > current_last:
+        user.last_memorized_page = page
     if user.current_page <= page:
         user.current_page = min(page + 1, quran_data.TOTAL_PAGES)
     user.total_memorized = await count_memorized(session, user.id)
@@ -444,6 +497,100 @@ async def get_memorization_history(session, user_id):
     return list(result.scalars().all())
 
 
+# ============== 4.5. الحصون الخمسة — الدالة الموحدة ==============
+# ملاحظة منهجية:
+#   الحصن الرابع (مراجعة القريب) = آخر 20 صفحة محفوظة فعلياً
+#   الحصن الخامس (مراجعة البعيد) = آخر 40 صفحة محفوظة فعلياً
+#   لا يجوز أن تبدأ المراجعة قبل user.start_page (أول صفحة محفوظة فعلاً).
+#   صيغة الحساب:
+#     near_start = max(start_page, last_page - 19)
+#     far_start  = max(start_page, last_page - 39)
+#   مثال (المائدة حتى 127، حافظ من 1):
+#     near: max(1, 108) = 108 → 127
+#     far : max(1,  88) =  88 → 127
+#   مثال (حافظ من 120 إلى 127 فقط):
+#     near: max(120, 108) = 120 → 127
+#     far : max(120,  88) = 120 → 127
+
+NEAR_REVIEW_PAGES = 20  # الحصن الرابع
+FAR_REVIEW_PAGES = 40   # الحصن الخامس
+
+
+def compute_fortresses(user):
+    """الدالة الموحدة الوحيدة لحساب الحصون الخمسة.
+
+    الوسائط:
+        user: كائن User (يحوي start_page, current_page, last_memorized_page,
+              total_memorized, onboarding_done)
+
+    يعيد dict يحوي:
+        - first_memorized_page : أول صفحة محفوظة فعلاً
+        - last_memorized_page  : آخر صفحة محفوظة فعلاً
+        - near_start, near_end : نطاق الحصن الرابع (مراجعة القريب)
+        - far_start, far_end   : نطاق الحصن الخامس (مراجعة البعيد)
+        - next_memorize_page   : الصفحة التالية للحفظ الجديد (الحصن الثالث)
+        - has_memorized        : هل حفظ شيئاً أصلاً؟
+    """
+    # قيم افتراضية آمنة
+    empty = {
+        "first_memorized_page": None,
+        "last_memorized_page": None,
+        "near_start": None, "near_end": None,
+        "far_start": None, "far_end": None,
+        "next_memorize_page": 1,
+        "has_memorized": False,
+    }
+    if user is None:
+        return empty
+
+    # قراءة start_page و last_memorized_page من سجلّ المستخدم
+    start_page = max(1, getattr(user, "start_page", 1) or 1)
+    # نفضّل last_memorized_page الصريح (المخزّن عند الحفظ)؛
+    # وإن لم يكن مضبوطاً (مستخدم قديم قبل إضافة العمود) نلجأ إلى current_page - 1
+    last_memorized = getattr(user, "last_memorized_page", 0) or 0
+    current = getattr(user, "current_page", 1) or 1
+    last_page = last_memorized if last_memorized > 0 else (current - 1)
+
+    # التحقق من وجود حفظ فعلي
+    has_memorized = (
+        last_page >= start_page
+        or getattr(user, "total_memorized", 0) > 0
+        or getattr(user, "onboarding_done", False)
+    )
+
+    if not has_memorized or last_page < 1:
+        # مستخدم جديد لم يحفظ بعد
+        empty["next_memorize_page"] = max(1, start_page)
+        return empty
+
+    # التأكد من أن last_page لا يتجاوز نهاية المصحف ولا يسبق start_page
+    last_page = max(start_page, min(last_page, quran_data.TOTAL_PAGES))
+
+    # الحصن الرابع: آخر 20 صفحة محفوظة فعلاً
+    # near_start = max(first_memorized_page, last_memorized_page - 19)
+    near_start = max(start_page, last_page - NEAR_REVIEW_PAGES + 1)
+    near_end = last_page
+
+    # الحصن الخامس: آخر 40 صفحة محفوظة فعلاً
+    # far_start = max(first_memorized_page, last_memorized_page - 39)
+    far_start = max(start_page, last_page - FAR_REVIEW_PAGES + 1)
+    far_end = last_page
+
+    # الحفظ الجديد: الصفحة التالية بعد آخر صفحة محفوظة
+    next_memorize_page = last_page + 1 if last_page < quran_data.TOTAL_PAGES else quran_data.TOTAL_PAGES
+
+    return {
+        "first_memorized_page": start_page,
+        "last_memorized_page": last_page,
+        "near_start": near_start,
+        "near_end": near_end,
+        "far_start": far_start,
+        "far_end": far_end,
+        "next_memorize_page": next_memorize_page,
+        "has_memorized": True,
+    }
+
+
 # ============== 5. المعالجات (الأوامر) ==============
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ParseMode
@@ -517,6 +664,7 @@ async def handle_free_text(update, context):
         if page == 0:
             user.current_page = 1
             user.start_page = 1
+            user.last_memorized_page = 0
             user.total_memorized = 0
             user.onboarding_done = True
             await session.commit()
@@ -526,12 +674,18 @@ async def handle_free_text(update, context):
                 parse_mode=ParseMode.MARKDOWN_V2, reply_markup=main_menu(),
             )
         else:
-            await set_memorized_up_to(session, user, page)
+            # تمرير first_page لدعم حفظ نطاق محدد (مثلاً: المائدة من 106 إلى 127)
+            await set_memorized_up_to(session, user, page, first_page=parsed.get("first_page"))
             del ONBOARDING_STATE[user_id]
+            first_p = parsed.get("first_page") or 1
             next_page = page + 1 if page < quran_data.TOTAL_PAGES else page
             surah = quran_data.page_to_surah(next_page)
+            if first_p > 1:
+                range_msg = f"من *الصفحة {first_p}* إلى *الصفحة {page}*"
+            else:
+                range_msg = f"حتى *الصفحة {page}*"
             await update.message.reply_text(
-                f"✅ *ما شاء الله\\!* سجّلت أنك حفظت إلى *الصفحة {page}*\n"
+                f"✅ *ما شاء الله\\!* سجّلت أنك حفظتِ {range_msg}\n"
                 f"📖 صفحتك التالية: *{next_page}* \\— سورة {escape_md(surah.name_ar)}\n\n"
                 f"🌅 الصباح 08:00: قراءة حزبين\n☀️ الظهيرة 13:00: استماع حزب\n🌙 المساء 20:00: سؤال تفاعلي\n\n"
                 f"اكتبي /today",
@@ -546,10 +700,11 @@ async def _show_today(update, context):
             await start_command(update, context)
             return
         progress = await get_or_create_progress(session, user.id)
-        weekly_review = await get_today_weekly_review(session, user.id)
         r_start, r_end = get_morning_reading_pages(user)
         l_start, l_end = get_midday_listening_pages(user)
-        memo_page = get_today_memorize_page(user)
+        # الحصول على الحصون بالدالة الموحدة
+        f = compute_fortresses(user)
+        memo_page = f["next_memorize_page"]
         memo_surah = quran_data.page_to_surah(memo_page)
         juz = quran_data.page_to_juz(r_start)
 
@@ -561,18 +716,16 @@ async def _show_today(update, context):
         f"📖 الجزء {juz}\n\n"
         f"☀️ *الظهيرة \\- الاستماع:*\n"
         f"{'✅' if progress.listening_done else '⬜'} حزب \\(10 صفحات\\): {l_start}–{l_end}\n\n"
-        f"🏰 *الحصون الخمسة:*\n\n"
-        f"1️⃣ *الحفظ اليومي*\n"
-        f"{'✅' if progress.memorize_done else '⬜'} صفحة {memo_page} \\— سورة {escape_md(memo_surah.name_ar)}\n\n"
-        f"2️⃣ *المراجعة اليومية*\n"
-        f"{'✅' if progress.daily_review_done else '⬜'} صفحة {memo_page}\n\n"
+        f"🏰 *الحصون الخمسة:* \\(/fortresses للتفاصيل\\)\n\n"
     )
-    if weekly_review:
-        text += "4️⃣ *مراجعة أسبوعية مستحقة اليوم:*\n"
-        for wr in weekly_review:
-            wr_surah = quran_data.page_to_surah(wr["page"])
-            text += f"   • {wr['label']}: صفحة {wr['page']} \\({escape_md(wr_surah.name_ar)}\\)\n"
-        text += "\n"
+    if not f["has_memorized"]:
+        text += "⚠️ لم تسجّلي حفظك بعد\\.\n\n"
+    else:
+        text += (
+            f"🆕 الحفظ الجديد: {'✅' if progress.memorize_done else '⬜'} صفحة {memo_page} \\— {escape_md(memo_surah.name_ar)}\n"
+            f"🔄 مراجعة القريب: {f['near_start']}–{f['near_end']}\n"
+            f"🛡️ مراجعة البعيد: {f['far_start']}–{f['far_end']}\n\n"
+        )
     text += "💡 `/markdone reading|listening|memorize`"
     if update.message:
         await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN_V2, reply_markup=main_menu(), disable_web_page_preview=True)
@@ -585,48 +738,87 @@ async def today_command(update, context):
 
 
 async def fortresses_command(update, context):
+    """عرض الحصون الخمسة وفق المنهجية المطلوبة.
+
+    المنهجية:
+      1. التهيئة المستمرة: قراءة جزئين + استماع حزب
+      2. التحضير: أسبوعي + ليلي + قبلي
+      3. الحفظ الجديد: صفحتان من آخر نقطة محفوظة
+      4. مراجعة القريب: آخر 20 صفحة محفوظة فعلاً
+      5. مراجعة البعيد: آخر 40 صفحة محفوظة فعلاً
+    """
     async with AsyncSessionLocal() as session:
         user = await get_or_create_user(session, update.effective_user.id)
-        today_memo = get_today_memorize_page(user)
-        today_review = await get_today_review_pages(session, user.id)
-        weekly_pages = await get_weekly_review_pages(session, user.id)
-        weekly_review = await get_today_weekly_review(session, user.id)
-        now = date.today()
-        monthly = await get_monthly_review(session, user.id, now.year, now.month)
-    text = (
-        "🏰 *طريقة الحصون الخمسة*\n\n━━━━━━━━━━━━━━━━\n\n"
-        f"1️⃣ *الحفظ اليومي* \\(الحصن الأول\\)\n📄 صفحة اليوم: *{today_memo}*\n📖 سورة {escape_md(quran_data.page_to_surah(today_memo).name_ar)}\n\n"
-        f"━━━━━━━━━━━━━━━━\n\n2️⃣ *المراجعة اليومية* \\(الحصن الثاني\\)\n"
-    )
-    if today_review:
-        text += f"📄 راجعي: {escape_md(', '.join(map(str, today_review)))}\n\n"
+        # الدالة الموحدة الوحيدة لحساب كل الحصون
+        f = compute_fortresses(user)
+
+    if not f["has_memorized"]:
+        text = (
+            "🏰 *الحصون الخمسة*\n\n"
+            "━━━━━━━━━━━━━━━━\n\n"
+            "⚠️ لم تسجّلي أي حفظ بعد\\.\n\n"
+            "اكتبي /start ثم أخبريني ماذا حفظتِ \\(مثلاً: `سورة المائدة` أو `صفحة 100`\\) "
+            "لكي يحسب البوت الحصون حسب محفوظك\\.\n\n"
+            "━━━━━━━━━━━━━━━━"
+        )
     else:
-        text += "📄 لم تحفظي شيئاً اليوم بعد\\.\n\n"
-    text += f"━━━━━━━━━━━━━━━━\n\n3️⃣ *الحفظ الأسبوعي* \\(الحصن الثالث\\)\n📄 آخر 7 أيام: {len(weekly_pages)} صفحة\n\n"
-    if weekly_pages:
-        text += f"📋 {escape_md(', '.join(map(str, weekly_pages[:10])))}"
-        if len(weekly_pages) > 10:
-            text += f" \\(\\+{len(weekly_pages)-10} أخرى\\)"
-        text += "\n\n"
-    text += "━━━━━━━━━━━━━━━━\n\n4️⃣ *المراجعة الأسبوعية* \\(الحصن الرابع\\)\n📅 5 مواعيد: ليلة، ليل، ثلث، اربعاء، خميس\n\n"
-    if weekly_review:
-        text += "🔍 *مستحقة اليوم:*\n"
-        for wr in weekly_review:
-            wr_surah = quran_data.page_to_surah(wr["page"])
-            text += f"   • {wr['label']}: صفحة {wr['page']} \\({escape_md(wr_surah.name_ar)}\\)\n"
-        text += "\n"
-    else:
-        text += "✅ لا مراجعات مستحقة اليوم\\.\n\n"
-    text += f"━━━━━━━━━━━━━━━━\n\n5️⃣ *المراجعة الشهرية* \\(الحصن الخامس\\)\n📅 {now.month}/{now.year}\n"
-    if monthly and monthly.pages_reviewed:
-        pages = monthly.pages_reviewed.split(",")
-        text += f"📄 {len(pages)} صفحة محفوظة هذا الشهر"
-    else:
-        text += "📄 لم تحفظي شيئاً هذا الشهر\\."
+        # أسماء السور للنطاقات
+        first_surah = quran_data.page_to_surah(f["first_memorized_page"])
+        last_surah = quran_data.page_to_surah(f["last_memorized_page"])
+        near_surah_start = quran_data.page_to_surah(f["near_start"])
+        near_surah_end = quran_data.page_to_surah(f["near_end"])
+        far_surah_start = quran_data.page_to_surah(f["far_start"])
+        far_surah_end = quran_data.page_to_surah(f["far_end"])
+        next_surah = quran_data.page_to_surah(f["next_memorize_page"])
+
+        # قراءة (الحصن الأول) — جزئان دورياً
+        r_start, r_end = get_morning_reading_pages(user)
+        l_start, l_end = get_midday_listening_pages(user)
+
+        text = (
+            "🏰 *الحصون الخمسة*\n\n"
+            f"📍 المحفوظ: من *الصفحة {f['first_memorized_page']}* إلى *{f['last_memorized_page']}*\n"
+            f"📖 السور: {escape_md(first_surah.name_ar)} → {escape_md(last_surah.name_ar)}\n\n"
+            "━━━━━━━━━━━━━━━━\n\n"
+            "📖 *الحصن الأول — التهيئة المستمرة*\n"
+            f"• القراءة: جزآن يومياً \\(الصفحات {r_start}–{r_end}\\)\n"
+            f"• الاستماع: حزب يومياً \\(الصفحات {l_start}–{l_end}\\)\n\n"
+            "━━━━━━━━━━━━━━━━\n\n"
+            "📚 *الحصن الثاني — التحضير*\n"
+            "• التحضير الأسبوعي: قراءة حفظ الأسبوع القادم\n"
+            "• التحضير الليلي: قراءة حفظ اليوم التالي قبل النوم\n"
+            "• التحضير القبلي: قراءة الدرس قبل الحفظ مباشرة\n\n"
+            "━━━━━━━━━━━━━━━━\n\n"
+            "🆕 *الحصن الثالث — الحفظ الجديد*\n"
+        )
+        # الحفظ الجديد: صفحتان تبدأ من next_memorize_page
+        if f["next_memorize_page"] >= quran_data.TOTAL_PAGES:
+            text += "🎉 وصلتِ إلى نهاية المصحف\\! راجعي وثبّتي محفوظك\\.\n\n"
+        else:
+            np1 = f["next_memorize_page"]
+            np2 = min(np1 + 1, quran_data.TOTAL_PAGES)
+            text += (
+                f"• صفحتان: *{np1}–{np2}*\n"
+                f"📖 السورة: {escape_md(next_surah.name_ar)}\n\n"
+            )
+        text += (
+            "━━━━━━━━━━━━━━━━\n\n"
+            "🔄 *الحصن الرابع — مراجعة القريب* \\(آخر 20 صفحة محفوظة\\)\n"
+            f"• من *الصفحة {f['near_start']}* إلى *{f['near_end']}*\n"
+            f"📖 {escape_md(near_surah_start.name_ar)} → {escape_md(near_surah_end.name_ar)}\n\n"
+            "━━━━━━━━━━━━━━━━\n\n"
+            "🛡️ *الحصن الخامس — مراجعة البعيد* \\(آخر 40 صفحة محفوظة\\)\n"
+            f"• من *الصفحة {f['far_start']}* إلى *{f['far_end']}*\n"
+            f"📖 {escape_md(far_surah_start.name_ar)} → {escape_md(far_surah_end.name_ar)}\n\n"
+            "━━━━━━━━━━━━━━━━"
+        )
+
     if update.message:
-        await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN_V2, reply_markup=main_menu(), disable_web_page_preview=True)
+        await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN_V2,
+                                        reply_markup=main_menu(), disable_web_page_preview=True)
     elif update.callback_query:
-        await update.callback_query.edit_message_text(text, parse_mode=ParseMode.MARKDOWN_V2, reply_markup=main_menu(), disable_web_page_preview=True)
+        await update.callback_query.edit_message_text(text, parse_mode=ParseMode.MARKDOWN_V2,
+                                                       reply_markup=main_menu(), disable_web_page_preview=True)
 
 
 async def progress_command(update, context):
@@ -779,7 +971,8 @@ async def reset_command(update, context):
         await session.execute(WeeklyReview.__table__.delete().where(WeeklyReview.user_id == user.id))
         await session.execute(MonthlyReview.__table__.delete().where(MonthlyReview.user_id == user.id))
         await session.execute(DailyProgress.__table__.delete().where(DailyProgress.user_id == user.id))
-        user.current_page = 1; user.start_page = 1; user.total_memorized = 0; user.onboarding_done = False
+        user.current_page = 1; user.start_page = 1; user.last_memorized_page = 0
+        user.total_memorized = 0; user.onboarding_done = False
         await session.commit()
     ONBOARDING_STATE.pop(update.effective_user.id, None)
     await update.message.reply_text("✅ تمت إعادة التهيئة\\.\nاكتبي /start", parse_mode=ParseMode.MARKDOWN_V2)
@@ -1067,27 +1260,6 @@ async def start_keepalive_server(port, public_health_url="", keepalive_interval=
 
 # ============== 8. نقطة التشغيل ==============
 
-def build_application():
-    if not BOT_TOKEN:
-        logger.error("❌ TELEGRAM_BOT_TOKEN غير مضبوط"); sys.exit(1)
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
-    app.add_handler(CommandHandler("start", start_command))
-    app.add_handler(CommandHandler("help", help_command))
-    app.add_handler(CommandHandler("today", today_command))
-    app.add_handler(CommandHandler("fortresses", fortresses_command))
-    app.add_handler(CommandHandler("progress", progress_command))
-    app.add_handler(CommandHandler("setpage", setpage_command))
-    app.add_handler(CommandHandler("markdone", markdone_command))
-    app.add_handler(CommandHandler("settime", settime_command))
-    app.add_handler(CommandHandler("timezone", timezone_command))
-    app.add_handler(CommandHandler("reset", reset_command))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_free_text))
-    app.add_handler(CallbackQueryHandler(button_callback, pattern="^(today|fortresses|progress|settings)$"))
-    app.add_handler(CallbackQueryHandler(evening_yes_callback, pattern="^evening_yes$"))
-    app.add_handler(CallbackQueryHandler(evening_later_callback, pattern="^evening_later$"))
-    return app
-
-
 async def post_init(app):
     """يُستدعى داخل event loop الخاص بـ PTB بعد إنشاء التطبيق."""
     logger.info("🔧 تهيئة قاعدة البيانات...")
@@ -1130,9 +1302,8 @@ async def post_shutdown(app):
         await runner.cleanup()
 
 
-# ============== 8. نقطة التشغيل ==============
-
 def build_application():
+    """يبني تطبيق PTB مع كل المعالجات ويربط post_init/post_shutdown."""
     if not BOT_TOKEN:
         logger.error("❌ TELEGRAM_BOT_TOKEN غير مضبوط"); sys.exit(1)
     app = (
