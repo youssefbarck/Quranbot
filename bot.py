@@ -308,19 +308,21 @@ async def parse_memorization_input(text):
             result.update({"type": "page_range", "value": (start_p, end_p), "page": end_p,
                            "first_page": start_p, "last_page": end_p})
             return result
-    m = re.search(r"صفحة\s*(\d+)", text)
+    # صفحة X (مفردة) — نعتبر أن المستخدمة حفظت من الصفحة 1 حتى X تسلسلياً
+    # هذا الافتراض أكثر واقعية لأن الغالبية يحفظون من البداية
+    m = re.search(r"صفحة\s*(\d+)$", text)
     if m:
         p = int(m.group(1))
         if 1 <= p <= quran_data.TOTAL_PAGES:
             result.update({"type": "page", "value": p, "page": p,
-                           "first_page": p, "last_page": p})
+                           "first_page": 1, "last_page": p})
             return result
     m = re.match(r"^\s*(\d+)\s*$", text)
     if m:
         p = int(m.group(1))
         if 1 <= p <= quran_data.TOTAL_PAGES:
             result.update({"type": "page", "value": p, "page": p,
-                           "first_page": p, "last_page": p})
+                           "first_page": 1, "last_page": p})
             return result
     return result
 
@@ -435,44 +437,44 @@ async def get_or_create_progress(session, user_id, progress_date=None):
 
 
 def get_morning_reading_pages(user):
-    """الحصن الأول (القراءة الصباحية) — شخصية لكل مستخدمة.
+    """الحصن الأول (القراءة الصباحية) — دورة شخصية على كامل المصحف.
 
-    القاعدة الجديدة:
-      تبدأ القراءة من نفس صفحة الحفظ الجديد (next_memorize_page)
-      لربط التهيئة بنقطة الحفظ الفعلية، فيستفيد القلب من قراءة ما سيحفظ قريباً.
-      حجم القراءة: 20 صفحة (حزبان) — قد تتعدّى نهاية المصحف فنلفّ من البداية.
+    القاعدة:
+      تبدأ القراءة من user.start_page وتتقدّم 20 صفحة يومياً (حزب واحد)،
+      مع لفّ تلقائي عند الوصول لنهاية المصحف (604).
+      كل مستخدمة لها دورتها الخاصة حسب تاريخ تسجيلها (created_at).
 
-    ملاحظة: إذا لم يحفظ المستخدم شيئاً بعد، تبدأ من الصفحة 1 (الفاتحة).
+    ملاحظة: إذا لم يحفظ المستخدم شيئاً بعد، تبدأ من start_page (الافتراضي 1).
     """
-    f = compute_fortresses(user)
-    next_page = f["next_memorize_page"] if f["has_memorized"] else 1
-    start_page = max(1, min(next_page, quran_data.TOTAL_PAGES))
-    end_page = start_page + 19
-    # إذا تجاوزنا نهاية المصحف، نلفّ من البداية
-    if end_page > quran_data.TOTAL_PAGES:
-        end_page = end_page - quran_data.TOTAL_PAGES
-    return start_page, end_page
+    start_page = max(1, getattr(user, "start_page", 1) or 1)
+    created = getattr(user, "created_at", None)
+    days = max(0, (date.today() - created).days) if created else 0
+    offset = (start_page - 1 + days * 20) % quran_data.TOTAL_PAGES
+    r_start = offset + 1
+    r_end = r_start + 19
+    if r_end > quran_data.TOTAL_PAGES:
+        # لفّ: النهاية تتجاوز المصحف، تعود من البداية
+        r_end = r_end - quran_data.TOTAL_PAGES
+    return r_start, r_end
 
 
 def get_midday_listening_pages(user):
-    """الحصن الأول (الاستماع الظهيرة) — شخصية لكل مستخدمة.
+    """الحصن الأول (الاستماع الظهيرة) — دورة شخصية على كامل المصحف.
 
-    القاعدة الجديدة:
-      يبدأ الاستماع من الصفحة التالية لنهاية القراءة الصباحية،
-      فيكون الاستماع للصفحات التي ستحفظها لاحقاً (ترسيخ سمعي قبل الحفظ).
-      حجم الاستماع: 10 صفحات (حزب) — مع لفّ من البداية عند تجاوز المصحف.
+    القاعدة:
+      يبدأ الاستماع من user.start_page (مع إزاحة 5 أيام عن القراءة)
+      ويتقدّم 10 صفحات يومياً (حزب)، مع لفّ تلقائي عند نهاية المصحف.
+      الإزاحة الزمنية تضمن أن صفحات الاستماع تختلف عن صفحات القراءة اليومية.
     """
-    f = compute_fortresses(user)
-    next_page = f["next_memorize_page"] if f["has_memorized"] else 1
-    # الاستماع يبدأ بعد 20 صفحة من القراءة (لتغطية صفحات مختلفة في نفس اليوم)
-    start_page = next_page + 20
-    if start_page > quran_data.TOTAL_PAGES:
-        start_page = start_page - quran_data.TOTAL_PAGES
-    start_page = max(1, min(start_page, quran_data.TOTAL_PAGES))
-    end_page = start_page + 9
-    if end_page > quran_data.TOTAL_PAGES:
-        end_page = end_page - quran_data.TOTAL_PAGES
-    return start_page, end_page
+    start_page = max(1, getattr(user, "start_page", 1) or 1)
+    created = getattr(user, "created_at", None)
+    days = max(0, (date.today() - created).days) if created else 0
+    offset = (start_page - 1 + (days + 5) * 10) % quran_data.TOTAL_PAGES
+    l_start = offset + 1
+    l_end = l_start + 9
+    if l_end > quran_data.TOTAL_PAGES:
+        l_end = l_end - quran_data.TOTAL_PAGES
+    return l_start, l_end
 
 
 async def mark_progress_done(session, user_id, task_type):
@@ -500,7 +502,7 @@ def compute_fortresses(user):
     """الدالة الموحدة الوحيدة لحساب الحصون الخمسة.
 
     الحصن الرابع (مراجعة القريب) = آخر 20 صفحة محفوظة فعلياً
-    الحصن الخامس (مراجعة البعيد) = آخر 40 صفحة محفوظة فعلياً
+    الحصن الخامس (مراجعة البعيد) = 40 صفحة قبل القريب مباشرة (لا تداخل)
     """
     empty = {
         "first_memorized_page": None,
@@ -509,30 +511,30 @@ def compute_fortresses(user):
         "far_start": None, "far_end": None,
         "next_memorize_page": 1,
         "has_memorized": False,
+        "has_far_review": False,
     }
     if user is None:
         return empty
 
     start_page = max(1, getattr(user, "start_page", 1) or 1)
     last_memorized = getattr(user, "last_memorized_page", 0) or 0
-    current = getattr(user, "current_page", 1) or 1
-    last_page = last_memorized if last_memorized > 0 else (current - 1)
 
-    has_memorized = (
-        last_page >= start_page
-        or getattr(user, "total_memorized", 0) > 0
-        or getattr(user, "onboarding_done", False)
-    )
+    # has_memorized يُحدَّد فقط بوجود صفحة محفوظة فعلية (لا يتأثر بـ onboarding_done)
+    has_memorized = last_memorized >= 1
 
-    if not has_memorized or last_page < 1:
+    if not has_memorized:
         empty["next_memorize_page"] = max(1, start_page)
+        empty["first_memorized_page"] = start_page
         return empty
 
-    last_page = max(start_page, min(last_page, quran_data.TOTAL_PAGES))
-    near_start = max(start_page, last_page - NEAR_REVIEW_PAGES + 1)
+    last_page = max(1, min(last_memorized, quran_data.TOTAL_PAGES))
+    near_start = max(1, last_page - NEAR_REVIEW_PAGES + 1)
     near_end = last_page
-    far_start = max(start_page, last_page - FAR_REVIEW_PAGES + 1)
-    far_end = last_page
+    # مراجعة البعيد = 40 صفحة قبل القريب مباشرة (لا تداخل)
+    far_end = near_start - 1
+    has_far = far_end >= 1
+    far_start = max(1, far_end - FAR_REVIEW_PAGES + 1) if has_far else None
+    far_end = far_end if has_far else None
     next_memorize_page = last_page + 1 if last_page < quran_data.TOTAL_PAGES else quran_data.TOTAL_PAGES
 
     return {
@@ -544,6 +546,7 @@ def compute_fortresses(user):
         "far_end": far_end,
         "next_memorize_page": next_memorize_page,
         "has_memorized": True,
+        "has_far_review": has_far,
     }
 
 # ============== 5. المعالجات (الأوامر) ==============
@@ -591,6 +594,20 @@ def progress_bar(current, total, length=15):
     if total == 0: return "░" * length
     filled = int((current / total) * length)
     return "█" * filled + "░" * (length - filled)
+
+
+def fmt_pages(start, end):
+    """تنسيق نطاق صفحات مع معالجة اللفّ عند نهاية المصحف.
+
+    مثال: (601, 16) → "601→604 + 1→16"
+    مثال: (50, 69) → "50–69"
+    """
+    if start is None or end is None:
+        return "—"
+    if end < start:
+        # لفّ: النهاية تتجاوز نهاية المصحف وتعود من البداية
+        return f"{start}→{quran_data.TOTAL_PAGES} + 1→{end}"
+    return f"{start}–{end}"
 
 
 # ====== لوحات المفاتيح ======
@@ -682,7 +699,7 @@ async def ask_onboarding_question(update, context, welcome=False):
         "💡 <i>بعد إجابتك سأحسب لكِ الحصون الخمسة فوراً:</i>\n"
         "  🆕 الحفظ الجديد (صفحتان بعد آخر محفوظ)\n"
         "  🔄 مراجعة القريب (آخر 20 صفحة محفوظة)\n"
-        "  🛡️ مراجعة البعيد (آخر 40 صفحة محفوظة)\n\n"
+        "  🛡️ مراجعة البعيد (40 صفحة قبل القريب)\n\n"
         "━━━━━━━━━━━━━━━━\n"
         "🌙 <i>أعانك الله وثبّت حفظك</i>"
     )
@@ -833,6 +850,10 @@ async def _process_onboarding_answer(update, context, text):
         else:
             range_msg = f"حتى <b>الصفحة {page}</b> (سورة {esc(last_surah.name_ar)})"
 
+        far_str = (
+            f"{f['far_start']}–{f['far_end']}"
+            if f.get("has_far_review") else "⏸️ لا ينطبق (المحفوظ أقل من 20 صفحة)"
+        )
         await update.message.reply_text(
             f"✅ <b>ما شاء الله! تبارك الرحمن</b> 🎉\n\n"
             f"سجّلت أنك حفظتِ {range_msg}\n\n"
@@ -840,7 +861,7 @@ async def _process_onboarding_answer(update, context, text):
             "📊 <b>حسابات الحصون الخمسة:</b>\n\n"
             f"🆕 <b>الحفظ الجديد:</b> صفحة <b>{f['next_memorize_page']}</b> — سورة {esc(next_surah.name_ar)}\n"
             f"🔄 <b>مراجعة القريب</b> (آخر 20 صفحة): {f['near_start']}–{f['near_end']}\n"
-            f"🛡️ <b>مراجعة البعيد</b> (آخر 40 صفحة): {f['far_start']}–{f['far_end']}\n\n"
+            f"🛡️ <b>مراجعة البعيد</b> (40 صفحة قبل القريب): {far_str}\n\n"
             "━━━━━━━━━━━━━━━━\n"
             "💡 <i>اضغطي <b>📋 مهام اليوم</b> في الأسفل لمعرفة تفاصيل كل مهمة</i>\n"
             "🌙 <i>أعانك الله ويسّر لكِ حفظ كتابه</i>",
@@ -874,20 +895,21 @@ async def _show_today(update, context):
     l_done = "✅" if progress.listening_done else "⬜"
     m_done = "✅" if progress.memorize_done else "⬜"
 
-    # حساب رقم اليوم في السنة (للعرض فقط)
-    day_of_year = date.today().timetuple().tm_yday
+    r_pages_str = fmt_pages(r_start, r_end)
+    l_pages_str = fmt_pages(l_start, l_end)
+    days_since = max(0, (date.today() - user.created_at).days) if user.created_at else 0
     text = (
         f"📋 <b>مهام اليوم — {today_date_esc}</b>\n"
-        f"📅 اليوم رقم <b>{day_of_year}</b> في السنة\n\n"
+        f"📅 اليوم رقم <b>{days_since + 1}</b> منذ بدأت معنا\n\n"
         "━━━━━━━━━━━━━━━━\n\n"
         f"🌅 <b>1. الصباح — القراءة (الحصن الأول)</b>\n"
-        f"{r_done} قراءة <b>حزبين (20 صفحة)</b>: <b>{r_start}–{r_end}</b>\n"
+        f"{r_done} قراءة <b>حزبين (20 صفحة)</b>: <b>{r_pages_str}</b>\n"
         f"📖 الجزء <b>{juz}</b>\n"
-        f"💡 <i>القراءة تبدأ من صفحة حفظك القادمة ({r_start}) — تهيّج قلبك لتلقّي ما ستحفظينه قريباً.</i>\n\n"
+        f"💡 <i>دورة قراءة شخصية تبدأ من صفحتك الأولى ({user.start_page}) وتتقدّم 20 صفحة يومياً مع لفّ عند نهاية المصحف.</i>\n\n"
         "━━━━━━━━━━━━━━━━\n\n"
         f"☀️ <b>2. الظهيرة — الاستماع (من الحصن الأول)</b>\n"
-        f"{l_done} استماع <b>حزب (10 صفحات)</b>: <b>{l_start}–{l_end}</b>\n"
-        f"💡 <i>الاستماع للصفحات التي ستحفظينها لاحقاً — ترسيخ سمعي قبل الحفظ. استمعي 3 مرات (تأمّل + متابعة + تكرار بصوت منخفض).</i>\n\n"
+        f"{l_done} استماع <b>حزب (10 صفحات)</b>: <b>{l_pages_str}</b>\n"
+        f"💡 <i>دورة استماع شخصية بإزاحة 5 أيام عن القراءة لتغطية صفحات مختلفة كل يوم.</i>\n\n"
         "━━━━━━━━━━━━━━━━\n\n"
         "🏰 <b>3. الحصون الخمسة</b>\n\n"
     )
@@ -923,10 +945,17 @@ async def _show_today(update, context):
             f"🔄 <b>مراجعة القريب (الحصن الرابع — آخر 20 صفحة محفوظة)</b>\n"
             f"• الصفحات <b>{f['near_start']}–{f['near_end']}</b>\n"
             f"💡 <i>راجعيها كاملة اليوم. اقرئيها من المصحف ثم من ذاكرتك.</i>\n\n"
-            f"🛡️ <b>مراجعة البعيد (الحصن الخامس — آخر 40 صفحة محفوظة)</b>\n"
-            f"• الصفحات <b>{f['far_start']}–{f['far_end']}</b>\n"
-            f"💡 <i>قسّميها على فترات اليوم. الهدف التثبيت لا الإتقان الكامل.</i>\n\n"
         )
+        if f.get("has_far_review"):
+            text += (
+                f"🛡️ <b>مراجعة البعيد (الحصن الخامس — 40 صفحة قبل القريب)</b>\n"
+                f"• الصفحات <b>{f['far_start']}–{f['far_end']}</b>\n"
+                f"💡 <i>قسّميها على فترات اليوم. الهدف التثبيت لا الإتقان الكامل.</i>\n\n"
+            )
+        else:
+            text += (
+                f"🛡️ <b>مراجعة البعيد (الحصن الخامس):</b> لا ينطبق الآن (المحفوظ أقل من 20 صفحة)\n\n"
+            )
 
     text += (
         "━━━━━━━━━━━━━━━━\n"
@@ -975,15 +1004,20 @@ async def fortresses_command(update, context):
         np_surah = quran_data.page_to_surah(np1)
         r_start, r_end = get_morning_reading_pages(user)
         l_start, l_end = get_midday_listening_pages(user)
+        r_pages_str = fmt_pages(r_start, r_end)
+        l_pages_str = fmt_pages(l_start, l_end)
+        days_since = max(0, (date.today() - user.created_at).days) if user.created_at else 0
         text = (
             "🏰 <b>الحصون الخمسة — مرحلة البداية</b>\n\n"
             "🌱 <b>أنتِ لم تحفظي شيئاً بعد</b>\n"
             "كل حافظة بدأت من الصفر، فلا تقلقي! إليكِ كيف ستعمل الحصون:\n\n"
             "━━━━━━━━━━━━━━━━\n\n"
-            "📖 <b>الحصن الأول — التهيئة المستمرة (شخصية لكل حافظة)</b>\n"
-            f"• <b>القراءة اليوم:</b> الصفحات <b>{r_start}–{r_end}</b>\n"
-            f"• <b>الاستماع اليوم:</b> الصفحات <b>{l_start}–{l_end}</b>\n"
-            f"💡 <i>تبدأ القراءة من صفحة حفظك القادمة، والاستماع للصفحات التي ستحفظينها لاحقاً. كل حافظة لها صفحاتها الخاصة.</i>\n\n"
+            "📖 <b>الحصن الأول — التهيئة المستمرة (دورة شخصية على كامل المصحف)</b>\n"
+            f"• <b>صفحتك الأولى:</b> {user.start_page}\n"
+            f"• <b>اليوم رقم:</b> {days_since + 1} منذ بدأت معنا\n"
+            f"• <b>القراءة اليوم:</b> الصفحات <b>{r_pages_str}</b>\n"
+            f"• <b>الاستماع اليوم:</b> الصفحات <b>{l_pages_str}</b>\n"
+            f"💡 <i>دورة قراءة شخصية تبدأ من صفحتك الأولى وتتقدّم 20 صفحة يومياً مع لفّ عند نهاية المصحف. دورة استماع منفصلة بإزاحة 5 أيام.</i>\n\n"
             "━━━━━━━━━━━━━━━━\n\n"
             "📚 <b>الحصن الثاني — التحضير</b>\n"
             "• <b>التحضير الليلي:</b> قبل النوم، اقرئي صفحة الغد من المصحف فقط (دون حفظ)\n"
@@ -995,7 +1029,7 @@ async def fortresses_command(update, context):
             "━━━━━━━━━━━━━━━━\n\n"
             "🔄 <b>الحصن الرابع — مراجعة القريب (آخر 20 صفحة محفوظة)</b>\n"
             "⏸️ <i>لا ينطبق الآن — سيُفعَّل بعد حفظ صفحتك الأولى</i>\n\n"
-            "🛡️ <b>الحصن الخامس — مراجعة البعيد (آخر 40 صفحة محفوظة)</b>\n"
+            "🛡️ <b>الحصن الخامس — مراجعة البعيد (40 صفحة قبل القريب)</b>\n"
             "⏸️ <i>لا ينطبق الآن — سيُفعَّل بعد حفظ 20+ صفحة</i>\n\n"
             "━━━━━━━━━━━━━━━━\n"
             "🤲 <i>ابدئي الآن بقراءة الصفحة 1 ثم احفظيها، وستتقدّمين بحول الله</i>"
@@ -1005,36 +1039,41 @@ async def fortresses_command(update, context):
         last_surah = quran_data.page_to_surah(f["last_memorized_page"])
         near_surah_start = quran_data.page_to_surah(f["near_start"])
         near_surah_end = quran_data.page_to_surah(f["near_end"])
-        far_surah_start = quran_data.page_to_surah(f["far_start"])
-        far_surah_end = quran_data.page_to_surah(f["far_end"])
         next_surah = quran_data.page_to_surah(f["next_memorize_page"])
 
         r_start, r_end = get_morning_reading_pages(user)
         l_start, l_end = get_midday_listening_pages(user)
+        r_pages_str = fmt_pages(r_start, r_end)
+        l_pages_str = fmt_pages(l_start, l_end)
+        days_since = max(0, (date.today() - user.created_at).days) if user.created_at else 0
 
         text = (
             "🏰 <b>الحصون الخمسة لحفظ القرآن</b>\n\n"
             f"📍 <b>المحفوظ الحالي:</b> من <b>الصفحة {f['first_memorized_page']}</b> إلى <b>{f['last_memorized_page']}</b>\n"
-            f"📖 السور: {esc(first_surah.name_ar)} ← {esc(last_surah.name_ar)}\n\n"
+            f"📖 السور: {esc(first_surah.name_ar)} ← {esc(last_surah.name_ar)}\n"
+            f"📅 اليوم رقم <b>{days_since + 1}</b> منذ بدأت معنا\n\n"
             "━━━━━━━━━━━━━━━━\n\n"
         )
 
         # الحصن الأول
         text += (
-            "📖 <b>الحصن الأول — التهيئة المستمرة (شخصية لكل حافظة)</b>\n"
-            f"• <b>القراءة:</b> جزآن يومياً (الصفحات <b>{r_start}–{r_end}</b>)\n"
-            f"• <b>الاستماع:</b> حزب يومياً (الصفحات <b>{l_start}–{l_end}</b>)\n"
-            f"💡 <i>تبدأ القراءة من صفحة حفظك القادمة ({r_start})، والاستماع للصفحات اللاحقة ({l_start}+). كل حافظة لها صفحاتها الخاصة حسب تقدّمها.</i>\n\n"
+            "📖 <b>الحصن الأول — التهيئة المستمرة (دورة شخصية على كامل المصحف)</b>\n"
+            f"• <b>صفحتك الأولى:</b> {user.start_page}\n"
+            f"• <b>القراءة اليوم:</b> حزبان (الصفحات <b>{r_pages_str}</b>)\n"
+            f"• <b>الاستماع اليوم:</b> حزب (الصفحات <b>{l_pages_str}</b>)\n"
+            f"💡 <i>دورة شخصية تبدأ من صفحتك الأولى، تتقدّم 20 صفحة يومياً للقراءة و10 للاستماع (بإزاحة 5 أيام)، مع لفّ عند نهاية المصحف. كل حافظة لها دورتها حسب تاريخ تسجيلها.</i>\n\n"
             "━━━━━━━━━━━━━━━━\n\n"
         )
 
         # الحصن الثاني
+        np1 = f["next_memorize_page"]
+        np2 = min(np1 + 1, quran_data.TOTAL_PAGES)
         text += (
             "📚 <b>الحصن الثاني — التحضير</b>\n"
             "• <b>التحضير الأسبوعي:</b> قراءة حفظ الأسبوع القادم قبل دخوله\n"
-            "• <b>التحضير الليلي:</b> قراءة حفظ اليوم التالي قبل النوم\n"
+            "• <b>التحضير الليلي:</b> قراءة صفحة الغد قبل النوم\n"
             "• <b>التحضير القبلي:</b> قراءة الدرس قبل الحفظ مباشرة\n"
-            f"💡 <i>الهدف: لا يأتي الحفظ غريباً على الذهن. سبق الإلمام يُقلّل المقاومة النفسية ويُسهّل التثبيت.</i>\n\n"
+            f"💡 <i>صفحة الغد المتوقعة: <b>{np2}</b> — سورة {esc(next_surah.name_ar)}</i>\n\n"
             "━━━━━━━━━━━━━━━━\n\n"
         )
 
@@ -1043,8 +1082,6 @@ async def fortresses_command(update, context):
         if f["next_memorize_page"] >= quran_data.TOTAL_PAGES:
             text += "🎉 <b>وصلتِ إلى نهاية المصحف!</b> راجعي وثبّتي محفوظك، فالختم لا يكتمل إلا بالمراجعة.\n\n"
         else:
-            np1 = f["next_memorize_page"]
-            np2 = min(np1 + 1, quran_data.TOTAL_PAGES)
             text += (
                 f"• <b>صفحتان:</b> <b>{np1}–{np2}</b>\n"
                 f"📖 السورة: {esc(next_surah.name_ar)}\n"
@@ -1061,12 +1098,22 @@ async def fortresses_command(update, context):
             "━━━━━━━━━━━━━━━━\n\n"
         )
 
-        # الحصن الخامس
+        # الحصن الخامس (قد لا ينطبق إذا كان المحفوظ أقل من 20 صفحة)
+        if f.get("has_far_review"):
+            far_surah_start = quran_data.page_to_surah(f["far_start"])
+            far_surah_end = quran_data.page_to_surah(f["far_end"])
+            text += (
+                "🛡️ <b>الحصن الخامس — مراجعة البعيد (40 صفحة قبل القريب)</b>\n"
+                f"• الصفحات <b>{f['far_start']}–{f['far_end']}</b>\n"
+                f"📖 السور: {esc(far_surah_start.name_ar)} ← {esc(far_surah_end.name_ar)}\n"
+                f"💡 <i>تُراجع على مدار الأسبوع (يمكن تقسيمها على أيام الأسبوع). الهدف التذكير لا الإتقان التام.</i>\n\n"
+            )
+        else:
+            text += (
+                "🛡️ <b>الحصن الخامس — مراجعة البعيد</b>\n"
+                "⏸️ <i>لا ينطبق الآن — سيُفعَّل بعد حفظ 20+ صفحة (لضمان عدم تداخل المراجعتين)</i>\n\n"
+            )
         text += (
-            "🛡️ <b>الحصن الخامس — مراجعة البعيد (آخر 40 صفحة محفوظة)</b>\n"
-            f"• الصفحات <b>{f['far_start']}–{f['far_end']}</b>\n"
-            f"📖 السور: {esc(far_surah_start.name_ar)} ← {esc(far_surah_end.name_ar)}\n"
-            f"💡 <i>تُراجع على مدار الأسبوع (يمكن تقسيمها على أيام الأسبوع). الهدف التذكير لا الإتقان التام.</i>\n\n"
             "━━━━━━━━━━━━━━━━\n"
             "🤲 <i>اللهم اجعل القرآن ربيع قلوبنا ونور صدورنا</i>"
         )
@@ -1211,6 +1258,10 @@ async def update_command(update, context):
             await session.refresh(user)
             f = compute_fortresses(user)
             last_surah = quran_data.page_to_surah(f["last_memorized_page"])
+            far_str = (
+                f"{f['far_start']}–{f['far_end']}"
+                if f.get("has_far_review") else "⏸️ لا ينطبق (المحفوظ أقل من 20 صفحة)"
+            )
             await update.message.reply_text(
                 f"✅ <b>تمّ التحديث!</b> 🎉\n\n"
                 f"آخر صفحة محفوظة: <b>{f['last_memorized_page']}</b> (سورة {esc(last_surah.name_ar)})\n\n"
@@ -1218,7 +1269,7 @@ async def update_command(update, context):
                 "📊 <b>الحصون بعد التحديث:</b>\n\n"
                 f"🆕 الحفظ الجديد: صفحة <b>{f['next_memorize_page']}</b>\n"
                 f"🔄 مراجعة القريب: <b>{f['near_start']}–{f['near_end']}</b>\n"
-                f"🛡️ مراجعة البعيد: <b>{f['far_start']}–{f['far_end']}</b>",
+                f"🛡️ مراجعة البعيد: <b>{far_str}</b>",
                 parse_mode=ParseMode.HTML,
                 reply_markup=main_keyboard(),
                 disable_web_page_preview=True,
@@ -1263,10 +1314,14 @@ async def setpage_command(update, context):
         await session.refresh(user)
         f = compute_fortresses(user)
     surah = quran_data.page_to_surah(page)
+    far_str = (
+        f"{f['far_start']}–{f['far_end']}"
+        if f.get("has_far_review") else "⏸️ لا ينطبق (المحفوظ أقل من 20 صفحة)"
+    )
     await update.message.reply_text(
         f"✅ صفحتك الحالية: <b>{page}</b>\n📖 السورة: {esc(surah.name_ar)}\n\n"
         f"🔄 مراجعة القريب: <b>{f['near_start']}–{f['near_end']}</b>\n"
-        f"🛡️ مراجعة البعيد: <b>{f['far_start']}–{f['far_end']}</b>",
+        f"🛡️ مراجعة البعيد: <b>{far_str}</b>",
         parse_mode=ParseMode.HTML,
         reply_markup=main_keyboard(),
         disable_web_page_preview=True,
@@ -1461,7 +1516,7 @@ async def help_command(update, context):
         "   💡 أُحفظي صفحة صفحة حتى الإتقان\n\n"
         "4️⃣ <b>مراجعة القريب</b> — آخر 20 صفحة محفوظة\n"
         "   💡 تُراجع يومياً كاملة\n\n"
-        "5️⃣ <b>مراجعة البعيد</b> — آخر 40 صفحة محفوظة\n"
+        "5️⃣ <b>مراجعة البعيد</b> — 40 صفحة قبل القريب\n"
         "   💡 تُقسّم على أيام الأسبوع\n\n"
         "━━━━━━━━━━━━━━━━\n"
         "⏰ <b>التذكيرات اليومية:</b>\n"
@@ -1586,6 +1641,7 @@ async def send_morning_message(bot, telegram_id):
             user = await get_or_create_user(session, telegram_id=telegram_id)
             if not user.onboarding_done: return
             r_start, r_end = get_morning_reading_pages(user)
+            r_pages_str = fmt_pages(r_start, r_end)
             juz = quran_data.page_to_juz(r_start)
             today_memo = get_today_memorize_page(user)
             memo_surah = quran_data.page_to_surah(today_memo)
@@ -1595,14 +1651,18 @@ async def send_morning_message(bot, telegram_id):
             f"📅 {_today_str()}\n\n"
             "━━━━━━━━━━━━━━━━\n\n"
             f"📖 <b>القراءة — حزبين (20 صفحة):</b>\n"
-            f"الصفحات <b>{r_start}–{r_end}</b> (الجزء {juz})\n\n"
+            f"الصفحات <b>{r_pages_str}</b> (الجزء {juz})\n\n"
             f"✍️ <b>صفحة الحفظ اليوم:</b> <b>{today_memo}</b>\n"
             f"📖 سورة {esc(memo_surah.name_ar)}\n\n"
         )
         if f["has_memorized"]:
+            far_str = (
+                f"{f['far_start']}–{f['far_end']}"
+                if f.get("has_far_review") else "⏸️ لا ينطبق بعد"
+            )
             text += (
                 f"🔄 <b>مراجعة القريب:</b> <b>{f['near_start']}–{f['near_end']}</b>\n"
-                f"🛡️ <b>مراجعة البعيد:</b> <b>{f['far_start']}–{f['far_end']}</b>\n\n"
+                f"🛡️ <b>مراجعة البعيد:</b> <b>{far_str}</b>\n\n"
             )
         text += (
             "━━━━━━━━━━━━━━━━\n"
@@ -1625,13 +1685,14 @@ async def send_midday_message(bot, telegram_id):
             user = await get_or_create_user(session, telegram_id=telegram_id)
             if not user.onboarding_done: return
             l_start, l_end = get_midday_listening_pages(user)
+            l_pages_str = fmt_pages(l_start, l_end)
             today_memo = get_today_memorize_page(user)
             audio_url = quran_data.get_page_audio_url(today_memo)
         text = (
             "☀️ <b>وقت الاستماع!</b>\n\n"
             f"📅 {_today_str()}\n\n"
             f"🎧 <b>استماع لحزب (10 صفحات):</b>\n"
-            f"الصفحات <b>{l_start}–{l_end}</b>\n\n"
+            f"الصفحات <b>{l_pages_str}</b>\n\n"
         )
         if audio_url:
             text += f'🔊 <a href="{esc(audio_url)}">استمعي بصوت الحصري</a>\n\n'
