@@ -18,7 +18,7 @@ from commands import (
     start_command, today_command, progress_command, fortresses_command,
     settings_command, activity_command, suggestions_command,
     update_command, settime_command, setamount_command,
-    notifications_command, help_command,
+    notifications_command, help_command, panel_command,
 )
 from free_text import handle_free_text
 from callback_router import button_callback
@@ -86,6 +86,7 @@ def build_application():
     # أوامر نصية
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("help", help_command))
+    app.add_handler(CommandHandler("panel", panel_command))
     app.add_handler(CommandHandler("today", today_command))
     app.add_handler(CommandHandler("fortresses", fortresses_command))
     app.add_handler(CommandHandler("progress", progress_command))

@@ -18,7 +18,10 @@ from onboarding import (
     ask_daily_amount, ask_weekly_amount, ask_plan_start_date,
     ask_reminder_times, finalize_onboarding,
 )
-from today_dashboard import show_today_dashboard, handle_task_button, show_pre_session_start
+from today_dashboard import (
+    show_today_dashboard, handle_task_button, show_pre_session_start,
+    show_main_panel, show_help,
+)
 from fortress_views import (
     show_fortresses_menu, show_fortress_1, show_fortress_2,
     show_fortress_3, show_fortress_4, show_fortress_5,
@@ -129,11 +132,23 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     # ====== التنقّل العام ======
+    if data == "main_panel":
+        await show_main_panel(update, context)
+        return
     if data == "today_dashboard":
         await show_today_dashboard(update, context)
         return
     if data == "fortresses_menu":
         await show_fortresses_menu(update, context)
+        return
+    if data == "show_progress":
+        await show_progress(update, context)
+        return
+    if data == "show_activity_log":
+        await show_activity_log(update, context)
+        return
+    if data == "show_help":
+        await show_help(update, context)
         return
     if data == "close_inline":
         await safe_edit_message(query, "👇 اختَر من القائمة بالأسفل", None)

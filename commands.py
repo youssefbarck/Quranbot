@@ -15,7 +15,7 @@ from user_service import get_or_create_user, update_settings, set_initial_hifz
 import config
 from keyboards import main_keyboard
 from onboarding import start_onboarding
-from today_dashboard import show_today_dashboard
+from today_dashboard import show_today_dashboard, show_main_panel, show_help
 from progress import show_progress, show_activity_log
 from fortress_views import show_fortresses_menu
 from settings_panel import show_settings_panel, show_suggestions
@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """الأمر /start — يبدأ الـ onboarding أو يعرض ورد اليوم."""
+    """الأمر /start — يبدأ الـ onboarding أو يعرض لوحة التحكم الشاملة."""
     user_info = update.effective_user
     async with AsyncSessionLocal() as session:
         user = await get_or_create_user(session, user_info.id, user_info.username, user_info.full_name)
@@ -36,16 +36,21 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     await update.message.reply_text(
-        f"👋 <b>أهلًا بعودتك!</b> 🌟\nإليكِ <b>ورد اليوم</b> 👇",
+        f"👋 <b>أهلًا بعودتك!</b> 🌟\nإليكِ <b>لوحة التحكم</b> 👇",
         parse_mode=ParseMode.HTML,
         reply_markup=main_keyboard(),
         disable_web_page_preview=True,
     )
-    await show_today_dashboard(update, context)
+    await show_main_panel(update, context)
 
 
 async def today_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await show_today_dashboard(update, context)
+
+
+async def panel_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """الأمر /panel — يعرض لوحة التحكم الشاملة."""
+    await show_main_panel(update, context)
 
 
 async def progress_command(update: Update, context: ContextTypes.DEFAULT_TYPE):

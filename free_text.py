@@ -14,7 +14,7 @@ import config, quran_data
 from keyboards import main_keyboard, back_to_today_inline
 from onboarding import ONBOARDING_STATE, parse_memorization_input, ask_daily_amount
 from settings_panel import INPUT_STATE, process_free_input
-from today_dashboard import show_today_dashboard
+from today_dashboard import show_today_dashboard, show_main_panel
 from progress import show_progress
 from utils import safe_send_message
 
@@ -33,7 +33,9 @@ async def handle_free_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # 1. لو النص يطابق أحد أزرار الـ ReplyKeyboard
     if text in KEYBOARD_TEXT_MAP:
         cmd = KEYBOARD_TEXT_MAP[text]
-        if cmd == "today":
+        if cmd == "main_panel":
+            await show_main_panel(update, context)
+        elif cmd == "today":
             await show_today_dashboard(update, context)
         elif cmd == "progress":
             await show_progress(update, context)

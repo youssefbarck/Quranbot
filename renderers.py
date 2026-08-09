@@ -442,3 +442,135 @@ def render_suggestions(suggestions: list) -> str:
         parts.append(f"• {esc(s)}")
     parts.extend(["", "<i>لن تُطبَّق هذه الاقتراحات تلقائيًا — القرار لك.</i>"])
     return "\n".join(parts)
+
+
+def render_main_panel(user: User, plan: dict, total_memorized: int) -> str:
+    """لوحة التحكم الشاملة — تجمع الإحصائيات الأساسية في شاشة واحدة منظّمة.
+
+    مستوحاة من بوتات المخزن الاحترافية: لا حاجة للتنقّل بين عدة شاشات.
+    كل ما يحتاجه المستخدم في الغالب موجود هنا.
+    """
+    h = plan["hifz"]
+    r_info = plan["reading_info"]
+    l_info = plan["listening_info"]
+    nr = plan["near_review"]
+    fr = plan["far_review"]
+    wp = plan["weekly_prep"]
+
+    pages_total = config.QURAN_PAGE_COUNT
+    percent = (total_memorized / pages_total * 100) if pages_total > 0 else 0
+    bar_filled = int(percent / 5)
+    bar = "█" * bar_filled + "░" * (20 - bar_filled)
+
+    today_str = date.today().strftime("%Y-%m-%d")
+    completed = plan.get("completed_count", 0)
+    remaining = 8 - completed
+
+    parts = [
+        "🏠 <b>لوحة التحكم</b>",
+        f"📅 {esc(today_str)}",
+        "",
+        "━━━━━━━━━━━━━━━━",
+        "📊 <b>تقدّمك في الحفظ</b>",
+        f"<code>{bar}</code>",
+        f"📖 {bold(f'{total_memorized} / {pages_total}')} وجه ({esc(f'{percent:.1f}%')})",
+        f"📍 آخر محفوظ: {bold(str(user.last_hifz_page or 0))}  "
+        f"🆕 التالي: {bold(str(user.next_hifz_page or 1))}",
+        "",
+        "━━━━━━━━━━━━━━━━",
+        "🔥 <b>الالتزام والإنجاز</b>",
+        f"   🔥 streak: {bold(f'{user.streak_days or 0} يوم')}",
+        f"   ✅ مهام اليوم: {bold(f'{completed}/8')}  ⏳ متبقٍّ: {bold(str(remaining))}",
+        f"   📚 مقدار يومي: {bold(f'{user.daily_hifz_amount} وجه')}  "
+        f"أسبوعي: {bold(f'{user.weekly_hifz_amount} وجه')}",
+        "",
+        "━━━━━━━━━━━━━━━━",
+        "📖 <b>الحصن الأول — التهيئة</b>",
+        f"   القراءة: حزب {bold(str(r_info['current_hizb']))}/{r_info['total_in_cycle']}  "
+        f"ختمة #{r_info['current_khatmah_number']}",
+        f"   الاستماع: حزب {bold(str(l_info['current_hizb']))}/{l_info['total_in_cycle']}  "
+        f"ختمة #{l_info['current_khatmah_number']}",
+    ]
+
+    parts.extend(["", "━━━━━━━━━━━━━━━━", "📚 <b>الحصن الثاني — التحضير</b>"])
+    if wp["start"] is not None:
+        parts.append(
+            f"   التحضير الأسبوعي (الأسبوع القادم): {bold(fmt_range(wp['start'], wp['end']))}"
+        )
+    else:
+        parts.append("   <i>أكملتِ القرآن — لا تحضير متبقٍّ</i>")
+    if h["pages"]:
+        if len(h["pages"]) == 1:
+            parts.append(f"   🌙 تحضير ليلي: اقرأ الوجه {bold(str(h['start']))}")
+        else:
+            parts.append(f"   🌙 تحضير ليلي: اقرأ {bold(fmt_range(h['start'], h['end']))}")
+
+    parts.extend(["", "━━━━━━━━━━━━━━━━", "🆕 <b>الحصن الثالث — الحفظ الجديد</b>"])
+    if h["pages"]:
+        if len(h["pages"]) == 1:
+            parts.append(f"   اليوم: احفظ الوجه {bold(str(h['start']))}")
+        else:
+            parts.append(f"   اليوم: احفظ {bold(fmt_range(h['start'], h['end']))}")
+    else:
+        parts.append("   <i>أكملتِ القرآن كاملًا 🎉</i>")
+
+    parts.extend(["", "━━━━━━━━━━━━━━━━", "🔄 <b>الحصن الرابع — مراجعة القريب</b>"])
+    if nr["applicable"]:
+        parts.append(
+            f"   {bold(str(nr['count']))} وجه قيد المراجعة ({nr['start']}→{nr['end']})"
+        )
+    else:
+        parts.append("   <i>سيُفعَّل بعد حفظ أول وجه</i>")
+
+    parts.extend(["", "━━━━━━━━━━━━━━━━", "🛡️ <b>الحصن الخامس — مراجعة البعيد</b>"])
+    if fr["applicable"]:
+        cycle_str = f"{fr['current_cycle']}/{fr['total_cycles']}"
+        parts.append(
+            f"   الدورة {bold(cycle_str)} "
+            f"({fr['cycle_start']}→{fr['cycle_end']})"
+        )
+    else:
+        parts.append("   <i>سيُفعَّل بعد حفظ 20+ وجه</i>")
+
+    parts.extend([
+        "",
+        "━━━━━━━━━━━━━━━━",
+        "👇 <b>الأزرار بالأسفل منظّمة بأقسام:</b>",
+        "   ✅/⬜ = مهام سريعة (اضغط للتسجيل/التراجع)",
+        "   🏰 = الحصون  • 📊 = التقدّم  • ⚙️ = الإعدادات",
+    ])
+    return "\n".join(parts)
+
+
+def render_help() -> str:
+    """شاشة المساعدة المختصرة."""
+    return (
+        "❓ <b>المساعدة — بوت الحصون الخمسة</b>\n\n"
+        "━━━━━━━━━━━━━━━━\n"
+        "📋 <b>الأوامر الأساسية:</b>\n"
+        "   /start — بدء / إعادة ضبط\n"
+        "   /today — ورد اليوم\n"
+        "   /progress — لوحة التقدّم\n"
+        "   /help — هذه الشاشة\n\n"
+        "━━━━━━━━━━━━━━━━\n"
+        "💬 <b>أوامر طبيعية (مجرد كتابة نص):</b>\n"
+        "   • «وش نحفظ اليوم؟» → ورد اليوم\n"
+        "   • «وين وصلت؟» → التقدّم\n"
+        "   • «حفظت الوجه 41» → تسجيل الحفظ\n"
+        "   • «قريت الورد» → تأكيد القراءة\n"
+        "   • «أريد نغيّر الحفظ إلى 2» → تعديل المقدار\n\n"
+        "━━━━━━━━━━━━━━━━\n"
+        "🏰 <b>الحصون الخمسة:</b>\n"
+        "   1️⃣ التهيئة — قراءة (30 يوم) + استماع (60 يوم)\n"
+        "   2️⃣ التحضير — أسبوعي + ليلي + قبلي (15 د)\n"
+        "   3️⃣ الحفظ — الوجه القادم بناءً على التقدّم\n"
+        "   4️⃣ القريب — آخر 20 وجه محفوظ\n"
+        "   5️⃣ البعيد — 40 وجه/دورة (دورات مستقلة)\n\n"
+        "━━━━━━━━━━━━━━━━\n"
+        "💡 <b>قواعد ذهبية:</b>\n"
+        "   • التحضير الأسبوعي دائمًا للأسبوع <b>القادم</b>\n"
+        "   • لا يتقدّم الحفظ تلقائيًا — يجب التأكيد\n"
+        "   • أزرار المهام قابلة للتراجع (toggle)\n"
+        "   • لا تُفقد البيانات بين الجلسات\n\n"
+        "<i>🤲 اللهم اجعل القرآن ربيع قلوبنا.</i>"
+    )
