@@ -10,7 +10,7 @@ from telegram.error import (
 )
 from telegram.ext import ContextTypes
 
-from ..ui.keyboards import main_keyboard
+from keyboards import main_keyboard
 
 logger = logging.getLogger(__name__)
 

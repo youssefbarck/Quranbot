@@ -9,17 +9,17 @@ from telegram import Update
 from telegram.constants import ParseMode
 from telegram.ext import ContextTypes
 
-from ..database import AsyncSessionLocal
-from ..models import UserSettings, FarReviewCycle
-from ..services.user_service import get_or_create_user, update_settings, set_initial_hifz
-from .. import config
-from ..ui.keyboards import main_keyboard
-from .onboarding import start_onboarding
-from .today_dashboard import show_today_dashboard
-from .progress import show_progress, show_activity_log
-from .fortress_views import show_fortresses_menu
-from .settings_panel import show_settings_panel, show_suggestions
-from .utils import safe_send_message
+from database import AsyncSessionLocal
+from models import UserSettings, FarReviewCycle
+from user_service import get_or_create_user, update_settings, set_initial_hifz
+import config
+from keyboards import main_keyboard
+from onboarding import start_onboarding
+from today_dashboard import show_today_dashboard
+from progress import show_progress, show_activity_log
+from fortress_views import show_fortresses_menu
+from settings_panel import show_settings_panel, show_suggestions
+from utils import safe_send_message
 
 logger = logging.getLogger(__name__)
 
@@ -92,7 +92,7 @@ async def update_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     text = " ".join(context.args)
-    from .onboarding import parse_memorization_input
+    from onboarding import parse_memorization_input
     parsed = await parse_memorization_input(text)
     if parsed["page"] is None:
         await update.message.reply_text(
@@ -177,7 +177,7 @@ async def settime_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await session.commit()
 
     # إعادة جدولة هذا التذكير
-    from ..scheduler.reminders import schedule_user_jobs
+    from reminders import schedule_user_jobs
     await schedule_user_jobs(context.bot, user)
 
     await update.message.reply_text(

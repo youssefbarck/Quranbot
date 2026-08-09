@@ -15,30 +15,31 @@ from unittest.mock import AsyncMock, MagicMock, patch
 # إعداد المسار
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-# فرض استخدام SQLite في الذاكرة للاختبارات
-os.environ.setdefault("DATABASE_URL", "")
+# فرض استخدام SQLite في الذاكرة للاختبارات (نستخدم override=True لأن load_dotenv()
+# في config.py قد يقرأ ملف .env من مجلد أب ويستبدل القيمة)
+os.environ["DATABASE_URL"] = ""
 
-from bot import config
-from bot.models import User, DailyProgress, MemorizationLog, FarReviewCycle, ActivityLog
-from bot.engines.hifz_engine import (
+import config
+from models import User, DailyProgress, MemorizationLog, FarReviewCycle, ActivityLog
+from hifz_engine import (
     get_today_hifz_assignment, confirm_memorization, set_last_hifz_page,
 )
-from bot.engines.revision_engine import (
+from revision_engine import (
     get_near_review_range, get_far_review_state, advance_far_review_cycle,
 )
-from bot.engines.reading_engine import (
+from reading_engine import (
     get_reading_assignment, advance_reading, get_reading_cycle_info,
 )
-from bot.engines.listening_engine import (
+from listening_engine import (
     get_listening_assignment, advance_listening, get_listening_cycle_info,
 )
-from bot.engines.prep_engine import (
+from prep_engine import (
     get_weekly_prep_range, get_nightly_prep_pages, get_pre_session_prep_page,
     start_pre_session_timer, end_pre_session_timer,
 )
-from bot.services.task_service import toggle_task, update_streak_on_activity, log_activity
-from bot.services.user_service import set_initial_hifz, update_settings
-from bot.database import init_db, AsyncSessionLocal, close_db
+from task_service import toggle_task, update_streak_on_activity, log_activity
+from user_service import set_initial_hifz, update_settings
+from database import init_db, AsyncSessionLocal, close_db
 
 
 def make_user(**kwargs):

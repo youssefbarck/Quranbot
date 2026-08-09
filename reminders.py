@@ -8,10 +8,10 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from sqlalchemy import select
 
-from ..database import AsyncSessionLocal
-from ..models import User, UserSettings
-from .. import config
-from ..ui.keyboards import main_keyboard
+from database import AsyncSessionLocal
+from models import User, UserSettings
+import config
+from keyboards import main_keyboard
 
 logger = logging.getLogger(__name__)
 

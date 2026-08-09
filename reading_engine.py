@@ -5,8 +5,8 @@
 يبدأ من الحزب 1، بعد الحزب 60 يعود للحزب 1.
 يحفظ موضع القراءة الحالي بشكل دائم في user.reading_hizb_current.
 """
-from .. import config
-from ..models import User
+import config
+from models import User
 
 
 def hizb_to_pages(hizb: int) -> tuple[int, int]:

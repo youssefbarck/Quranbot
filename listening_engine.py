@@ -4,9 +4,9 @@
 دورة 60 يومًا، حزب/يوم = 60 حزبًا = ختمة كاملة.
 مستقلة تمامًا عن القراءة.
 """
-from .. import config
-from ..models import User
-from .reading_engine import hizb_to_pages
+import config
+from models import User
+from reading_engine import hizb_to_pages
 
 
 def get_listening_assignment(user: User) -> dict:

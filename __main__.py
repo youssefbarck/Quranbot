@@ -1,5 +1,5 @@
-"""نقطة دخول عند تشغيل python -m bot."""
-from .main import main
+"""Entry point: python main.py"""
+from main import main
 
 if __name__ == "__main__":
     main()

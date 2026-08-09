@@ -4,9 +4,9 @@
 import html
 from datetime import date
 
-from .. import config
-from ..models import User, DailyProgress
-from .. import quran_data
+import config
+from models import User, DailyProgress
+import quran_data
 
 
 def esc(text) -> str:
@@ -406,7 +406,7 @@ def render_settings_panel(user: User, settings_list: list) -> str:
         "━━━━━━━━━━━━━━━━",
         "⏰ <b>أوقات التذكيرات:</b>",
     ]
-    from .. import config
+    import config
     labels = config.REMINDER_LABELS_AR
     settings_by_type = {s.reminder_type: s for s in settings_list}
     for rtype in config.REMINDER_TYPES:

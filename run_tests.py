@@ -1,15 +1,8 @@
-#!/usr/bin/env python3
-"""سكربت اختبار شامل."""
-import os
-import sys
-
-# فرض SQLite في الذاكرة للاختبارات
-os.environ.pop("DATABASE_URL", None)
-os.environ["DATABASE_URL"] = ""
-
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-if __name__ == "__main__":
-    from tests.test_engines import run_all_tests
-    success = run_all_tests()
-    sys.exit(0 if success else 1)
+"""Run all tests: python run_tests.py"""
+import sys, os, unittest
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+loader = unittest.TestLoader()
+suite = loader.discover("tests", pattern="test_*.py")
+runner = unittest.TextTestRunner(verbosity=2)
+result = runner.run(suite)
+sys.exit(0 if result.wasSuccessful() else 1)

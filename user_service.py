@@ -7,9 +7,9 @@ from typing import Optional
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from .. import config
-from ..models import User, MemorizationLog
-from ..database import ensure_default_reminders
+import config
+from models import User, MemorizationLog
+from database import ensure_default_reminders
 
 
 async def get_or_create_user(

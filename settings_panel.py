@@ -10,19 +10,19 @@ from telegram import Update
 from telegram.constants import ParseMode
 from telegram.ext import ContextTypes
 
-from ..database import AsyncSessionLocal
-from ..models import UserSettings
-from ..services.user_service import get_or_create_user, update_settings, set_initial_hifz
-from ..services.smart_suggestions import generate_suggestions
-from ..engines.hifz_engine import set_last_hifz_page
-from ..engines.revision_engine import get_far_review_state
-from .. import config, quran_data
-from ..ui.keyboards import (
+from database import AsyncSessionLocal
+from models import UserSettings
+from user_service import get_or_create_user, update_settings, set_initial_hifz
+from smart_suggestions import generate_suggestions
+from hifz_engine import set_last_hifz_page
+from revision_engine import get_far_review_state
+import config, quran_data
+from keyboards import (
     settings_panel_inline, back_to_today_inline,
     confirm_inline, daily_amount_inline, weekly_amount_inline,
 )
-from ..ui.renderers import render_settings_panel, render_suggestions, esc
-from .utils import safe_edit_message
+from renderers import render_settings_panel, render_suggestions, esc
+from utils import safe_edit_message
 
 logger = logging.getLogger(__name__)
 
@@ -241,7 +241,7 @@ async def process_free_input(update: Update, context: ContextTypes.DEFAULT_TYPE,
             cycle = int(text)
             if cycle < 1:
                 raise ValueError("خارج النطاق")
-            from ..models import FarReviewCycle
+            from models import FarReviewCycle
             async with AsyncSessionLocal() as session:
                 user = await get_or_create_user(session, telegram_id=user_id)
                 result = await session.execute(

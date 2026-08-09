@@ -12,8 +12,8 @@
 
 لا يتم تحريك الحفظ تلقائيًا إذا فات المستخدم يومًا — يبقى نفس الوجه مطلوبًا.
 """
-from .. import config
-from ..models import User
+import config
+from models import User
 
 
 def get_today_hifz_assignment(user: User) -> dict:

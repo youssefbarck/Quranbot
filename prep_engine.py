@@ -17,8 +17,8 @@
 """
 from datetime import datetime, timedelta
 
-from .. import config
-from ..models import User
+import config
+from models import User
 
 
 def get_weekly_prep_range(user: User) -> dict:

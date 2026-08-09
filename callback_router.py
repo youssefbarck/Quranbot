@@ -8,34 +8,34 @@ from telegram import Update
 from telegram.constants import ParseMode
 from telegram.ext import ContextTypes
 
-from ..database import AsyncSessionLocal
-from ..services.user_service import get_or_create_user
-from ..services.task_service import get_or_create_progress, toggle_task, start_pre_session
-from ..engines.today_plan import compute_today_plan
-from .. import config, quran_data
-from .onboarding import (
+from database import AsyncSessionLocal
+from user_service import get_or_create_user
+from task_service import get_or_create_progress, toggle_task, start_pre_session
+from today_plan import compute_today_plan
+import config, quran_data
+from onboarding import (
     ONBOARDING_STATE, start_onboarding, process_onboarding_memorization,
     ask_daily_amount, ask_weekly_amount, ask_plan_start_date,
     ask_reminder_times, finalize_onboarding,
 )
-from .today_dashboard import show_today_dashboard, handle_task_button, show_pre_session_start
-from .fortress_views import (
+from today_dashboard import show_today_dashboard, handle_task_button, show_pre_session_start
+from fortress_views import (
     show_fortresses_menu, show_fortress_1, show_fortress_2,
     show_fortress_3, show_fortress_4, show_fortress_5,
 )
-from .progress import show_progress, show_activity_log
-from .settings_panel import (
+from progress import show_progress, show_activity_log
+from settings_panel import (
     show_settings_panel, ask_last_page, ask_daily_amount as settings_ask_daily,
     ask_weekly_amount as settings_ask_weekly,
     ask_reading_hizb, ask_listening_hizb, ask_far_cycle,
     ask_notifications, show_reminders_settings, show_suggestions,
 )
-from .utils import safe_edit_message
+from utils import safe_edit_message
 
 logger = logging.getLogger(__name__)
 
 # خريطة أنواع المهام
-from ..services.task_service import TASK_FIELD_MAP
+from task_service import TASK_FIELD_MAP
 
 
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -90,7 +90,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         amount = int(val)
         if amount in (1, 2):
             async with AsyncSessionLocal() as session:
-                from ..services.user_service import update_settings
+                from user_service import update_settings
                 user = await get_or_create_user(session, telegram_id=update.effective_user.id)
                 await update_settings(session, user, daily_amount=amount)
             await ask_weekly_amount(update, context)
@@ -102,7 +102,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         amount = int(m.group(1))
         if amount in (5, 7, 10, 14):
             async with AsyncSessionLocal() as session:
-                from ..services.user_service import update_settings
+                from user_service import update_settings
                 user = await get_or_create_user(session, telegram_id=update.effective_user.id)
                 await update_settings(session, user, weekly_amount=amount)
             await ask_plan_start_date(update, context)
@@ -112,7 +112,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data == "ob_plan_today":
         from datetime import date as date_cls
         async with AsyncSessionLocal() as session:
-            from ..services.user_service import update_settings
+            from user_service import update_settings
             user = await get_or_create_user(session, telegram_id=update.effective_user.id)
             await update_settings(session, user, plan_start_date=date_cls.today())
         await ask_reminder_times(update, context)
@@ -201,7 +201,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         amount = int(m.group(1))
         if amount in (1, 2, 5, 7, 10, 14):
             async with AsyncSessionLocal() as session:
-                from ..services.user_service import update_settings
+                from user_service import update_settings
                 user = await get_or_create_user(session, telegram_id=update.effective_user.id)
                 # نحدد إذا كان يومي أم أسبوعي حسب القيمة
                 if amount in (1, 2):

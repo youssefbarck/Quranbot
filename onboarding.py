@@ -10,16 +10,16 @@ from telegram import Update
 from telegram.constants import ParseMode
 from telegram.ext import ContextTypes
 
-from ..database import AsyncSessionLocal
-from ..services.user_service import get_or_create_user, set_initial_hifz, update_settings
-from .. import quran_data, config
-from ..ui.keyboards import (
+from database import AsyncSessionLocal
+from user_service import get_or_create_user, set_initial_hifz, update_settings
+import quran_data, config
+from keyboards import (
     onboarding_start_inline, daily_amount_inline, weekly_amount_inline,
     plan_start_inline, reminders_confirm_inline,
     main_keyboard,
 )
-from ..ui.renderers import esc, bold, code
-from .utils import safe_edit_message
+from renderers import esc, bold, code
+from utils import safe_edit_message
 
 logger = logging.getLogger(__name__)
 
@@ -148,7 +148,7 @@ async def ask_reminder_times(update: Update, context: ContextTypes.DEFAULT_TYPE)
     """الخطوة 5: تأكيد أوقات التذكيرات."""
     user_id = update.effective_user.id
     ONBOARDING_STATE[user_id] = "ob_step_5_reminders"
-    from .. import config
+    import config
     text = (
         "✅ <b>تمّ ضبط تاريخ البداية!</b>\n\n"
         "━━━━━━━━━━━━━━━━\n\n"

@@ -7,13 +7,13 @@ from typing import Optional
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from .. import config
-from ..models import User, DailyProgress, ActivityLog
-from ..engines.hifz_engine import confirm_memorization, set_last_hifz_page
-from ..engines.reading_engine import advance_reading
-from ..engines.listening_engine import advance_listening
-from ..engines.revision_engine import advance_far_review_cycle
-from ..engines.prep_engine import start_pre_session_timer, end_pre_session_timer
+import config
+from models import User, DailyProgress, ActivityLog
+from hifz_engine import confirm_memorization, set_last_hifz_page
+from reading_engine import advance_reading
+from listening_engine import advance_listening
+from revision_engine import advance_far_review_cycle
+from prep_engine import start_pre_session_timer, end_pre_session_timer
 
 
 # خريطة أنواع المهام ← أسماء الحقول في DailyProgress
@@ -102,7 +102,7 @@ async def toggle_task(
             if not result.get("success"):
                 return {"success": False, "reason": result.get("reason"), "message": result.get("message")}
             # تسجيل الأوجه المحفوظة في MemorizationLog
-            from ..models import MemorizationLog
+            from models import MemorizationLog
             for p in result["memorized_pages"]:
                 existing = await session.execute(
                     select(MemorizationLog).where(

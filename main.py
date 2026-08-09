@@ -12,21 +12,21 @@ from telegram.ext import (
     MessageHandler, ContextTypes, filters,
 )
 
-from . import config
-from .database import init_db, close_db
-from .handlers.commands import (
+import config
+from database import init_db, close_db
+from commands import (
     start_command, today_command, progress_command, fortresses_command,
     settings_command, activity_command, suggestions_command,
     update_command, settime_command, setamount_command,
     notifications_command, help_command,
 )
-from .handlers.free_text import handle_free_text
-from .handlers.callback_router import button_callback
-from .handlers.error_handler import error_handler
-from .scheduler.reminders import (
+from free_text import handle_free_text
+from callback_router import button_callback
+from error_handler import error_handler
+from reminders import (
     start_scheduler, shutdown_scheduler, schedule_all_users_jobs
 )
-from .keepalive import start_keepalive_server, start_self_ping
+from keepalive import start_keepalive_server, start_self_ping
 
 logging.basicConfig(
     format="%(asctime)s — %(name)s — %(levelname)s — %(message)s",

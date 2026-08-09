@@ -40,39 +40,52 @@
 ## 📦 البنية المعمارية
 
 ```
-bot/
+Quranbot/
 ├── config.py              # الثوابت والإعدادات
 ├── quran_data.py          # بيانات السور والأجزاء والأحزاب
 ├── models.py              # SQLAlchemy models (User, DailyProgress, ...)
 ├── database.py            # المحرك والجلسات والـ migration
-├── engines/               # محركات الحساب الديترمية
-│   ├── hifz_engine.py        # الحفظ الجديد
-│   ├── revision_engine.py    # مراجعات قريب + بعيد
-│   ├── reading_engine.py     # دورة القراءة
-│   ├── listening_engine.py   # دورة الاستماع
-│   ├── prep_engine.py        # التحضير الأسبوعي + الليلي + القبلي
-│   └── today_plan.py         # الموحِّد: USER STATE → TODAY'S PLAN
-├── services/              # طبقة منطق الأعمال
-│   ├── user_service.py       # إنشاء/تحديث المستخدم
-│   ├── task_service.py       # تسجيل/إلغاء/تأجيل المهام
-│   └── smart_suggestions.py  # تحليل السلوك
-├── scheduler/
-│   └── reminders.py       # 8 وظائف تذكير لكل مستخدم
-├── handlers/              # معالجات Telegram
-│   ├── onboarding.py         # Setup Wizard (5 خطوات)
-│   ├── today_dashboard.py    # ورد اليوم + أزرار المهام
-│   ├── fortress_views.py     # تفاصيل كل حصن
-│   ├── progress.py           # لوحة التقدم
-│   ├── settings_panel.py     # لوحة الإعدادات
-│   ├── free_text.py          # NLP بسيط للنصوص
-│   ├── callback_router.py    # موزّع أزرار Inline
-│   ├── commands.py           # الأوامر النصية (/start, /help, ...)
-│   └── error_handler.py      # معالج أخطاء موحَّد
-├── ui/
-│   ├── keyboards.py       # ReplyKeyboard + InlineKeyboards
-│   └── renderers.py       # عارضات HTML
+│
+│   ── محركات الحساب الديترميني ──
+├── hifz_engine.py         # الحفظ الجديد
+├── revision_engine.py     # مراجعات قريب + بعيد
+├── reading_engine.py      # دورة القراءة
+├── listening_engine.py    # دورة الاستماع
+├── prep_engine.py         # التحضير الأسبوعي + الليلي + القبلي
+├── today_plan.py          # الموحِّد: USER STATE → TODAY'S PLAN
+│
+│   ── طبقة منطق الأعمال ──
+├── user_service.py        # إنشاء/تحديث المستخدم
+├── task_service.py        # تسجيل/إلغاء/تأجيل المهام
+├── smart_suggestions.py   # تحليل السلوك
+│
+│   ── المجدول ──
+├── reminders.py           # 8 وظائف تذكير لكل مستخدم
+│
+│   ── معالجات Telegram ──
+├── onboarding.py          # Setup Wizard (5 خطوات)
+├── today_dashboard.py     # ورد اليوم + أزرار المهام
+├── fortress_views.py      # تفاصيل كل حصن
+├── progress.py            # لوحة التقدم
+├── settings_panel.py      # لوحة الإعدادات
+├── free_text.py           # NLP بسيط للنصوص
+├── callback_router.py     # موزّع أزرار Inline
+├── commands.py            # الأوامر النصية (/start, /help, ...)
+├── error_handler.py       # معالج أخطاء موحَّد
+│
+│   ── طبقة الواجهة ──
+├── keyboards.py           # ReplyKeyboard + InlineKeyboards
+├── renderers.py           # عارضات HTML
+├── utils.py / ui_helpers.py  # دوال مساعدة
+│
+│   ── نقطة الدخول ──
+├── main.py                # نقطة الدخول (python main.py)
+├── __main__.py            # يدعم python -m too
 ├── keepalive.py           # خادم keep-alive لـ Render
-└── main.py                # نقطة الدخول
+├── run_tests.py           # تشغيل الاختبارات
+│
+├── tests/test_engines.py  # 36 سيناريو اختبار
+└── scripts/run_tests.py   # مشغّل بديل
 ```
 
 ## 🚀 التشغيل المحلي
@@ -86,18 +99,18 @@ cp .env.example .env
 # عدّل القيم في .env
 
 # 3. تشغيل البوت
-python -m bot.main
+python main.py
 ```
 
 ## 🧪 الاختبارات
 
 ```bash
-python tests/test_engines.py
+python run_tests.py
 # أو
 python -m pytest tests/test_engines.py -v
 ```
 
-الاختبارات تغطّي 18+ سيناريو من مواصفات المستخدم:
+الاختبارات تغطّي 36 سيناريو من مواصفات المستخدم (جميعها تُنجح):
 - مستخدم يبدأ من الوجه 1 / 40 / 120
 - حفظ وجه / وجهين يوميًا
 - تخطي يوم (لا يتحرك الحفظ)

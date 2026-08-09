@@ -8,21 +8,21 @@ from telegram import Update
 from telegram.constants import ParseMode
 from telegram.ext import ContextTypes
 
-from ..database import AsyncSessionLocal
-from ..services.user_service import get_or_create_user
-from .. import config, quran_data
-from ..ui.keyboards import main_keyboard, back_to_today_inline
-from .onboarding import ONBOARDING_STATE, parse_memorization_input, ask_daily_amount
-from .settings_panel import INPUT_STATE, process_free_input
-from .today_dashboard import show_today_dashboard
-from .progress import show_progress
-from .utils import safe_send_message
+from database import AsyncSessionLocal
+from user_service import get_or_create_user
+import config, quran_data
+from keyboards import main_keyboard, back_to_today_inline
+from onboarding import ONBOARDING_STATE, parse_memorization_input, ask_daily_amount
+from settings_panel import INPUT_STATE, process_free_input
+from today_dashboard import show_today_dashboard
+from progress import show_progress
+from utils import safe_send_message
 
 logger = logging.getLogger(__name__)
 
 
 # خريطة نصوص ReplyKeyboard
-from .ui_helpers import KEYBOARD_TEXT_MAP
+from ui_helpers import KEYBOARD_TEXT_MAP
 
 
 async def handle_free_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -38,10 +38,10 @@ async def handle_free_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif cmd == "progress":
             await show_progress(update, context)
         elif cmd == "fortresses":
-            from .fortress_views import show_fortresses_menu
+            from fortress_views import show_fortresses_menu
             await show_fortresses_menu(update, context)
         elif cmd == "settings":
-            from .settings_panel import show_settings_panel
+            from settings_panel import show_settings_panel
             await show_settings_panel(update, context)
         return
 
@@ -54,7 +54,7 @@ async def handle_free_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # 3. لو المستخدم في وضع الـ onboarding
     state = ONBOARDING_STATE.get(user_id)
     if state == "ob_step_1_memorization":
-        from .onboarding import process_onboarding_memorization
+        from onboarding import process_onboarding_memorization
         await process_onboarding_memorization(update, context, text)
         return
 
@@ -95,7 +95,7 @@ async def try_natural_language(update: Update, context: ContextTypes.DEFAULT_TYP
     # === "وش نحفظ اليوم؟" ===
     if any(k in text_lower for k in ["شنو نحفظ", "وش نحفظ", "ايش نحفظ", "ماذا أحفظ", "ماذا احفظ", "وش نقرا", "وش نراجع"]):
         if "راجع" in text_lower:
-            from .fortress_views import show_fortress_4, show_fortress_5, show_fortresses_menu
+            from fortress_views import show_fortress_4, show_fortress_5, show_fortresses_menu
             await show_fortresses_menu(update, context)
         else:
             await show_today_dashboard(update, context)
@@ -113,7 +113,7 @@ async def try_natural_language(update: Update, context: ContextTypes.DEFAULT_TYP
         if 1 <= page <= quran_data.TOTAL_PAGES:
             # تعديل آخر محفوظ
             async with AsyncSessionLocal() as session:
-                from ..services.user_service import get_or_create_user, set_initial_hifz
+                from user_service import get_or_create_user, set_initial_hifz
                 user = await get_or_create_user(session, telegram_id=update.effective_user.id)
                 # إذا الصفحة أكبر من last_hifz_page، نحدّث
                 if page > (user.last_hifz_page or 0):
@@ -136,8 +136,8 @@ async def try_natural_language(update: Update, context: ContextTypes.DEFAULT_TYP
     # === "قريت الورد" / "ختمت القراءة" ===
     if any(k in text_lower for k in ["قريت الورد", "قريت ورد", "ختمت القراءة", "خلصت القراءة", "قرأت الورد"]):
         async with AsyncSessionLocal() as session:
-            from ..services.user_service import get_or_create_user
-            from ..services.task_service import get_or_create_progress, toggle_task
+            from user_service import get_or_create_user
+            from task_service import get_or_create_progress, toggle_task
             user = await get_or_create_user(session, telegram_id=update.effective_user.id)
             progress = await get_or_create_progress(session, user.id)
             if not progress.reading_done:
@@ -160,8 +160,8 @@ async def try_natural_language(update: Update, context: ContextTypes.DEFAULT_TYP
     # === "سمعت الاستماع" / "خلصت الاستماع" ===
     if any(k in text_lower for k in ["سمعت", "خلصت الاستماع", "قريت الاستماع", "أنهيت الاستماع"]):
         async with AsyncSessionLocal() as session:
-            from ..services.user_service import get_or_create_user
-            from ..services.task_service import get_or_create_progress, toggle_task
+            from user_service import get_or_create_user
+            from task_service import get_or_create_progress, toggle_task
             user = await get_or_create_user(session, telegram_id=update.effective_user.id)
             progress = await get_or_create_progress(session, user.id)
             if not progress.listening_done:
@@ -177,8 +177,8 @@ async def try_natural_language(update: Update, context: ContextTypes.DEFAULT_TYP
     # === "اليوم ما قدرت" ===
     if any(k in text_lower for k in ["ما قدرت", "ما قديت", "اليوم ما", "نسيت اليوم", "تأجيل", "أجّل"]):
         async with AsyncSessionLocal() as session:
-            from ..services.user_service import get_or_create_user
-            from ..services.task_service import log_activity
+            from user_service import get_or_create_user
+            from task_service import log_activity
             user = await get_or_create_user(session, telegram_id=update.effective_user.id)
             await log_activity(session, user.id, "postponed", "أجّل المستخدم مهام اليوم")
         await update.message.reply_text(
@@ -196,7 +196,7 @@ async def try_natural_language(update: Update, context: ContextTypes.DEFAULT_TYP
         amount = int(m.group(1))
         if 1 <= amount <= 10:
             async with AsyncSessionLocal() as session:
-                from ..services.user_service import get_or_create_user, update_settings
+                from user_service import get_or_create_user, update_settings
                 user = await get_or_create_user(session, telegram_id=update.effective_user.id)
                 await update_settings(session, user, daily_amount=amount)
             await update.message.reply_text(
@@ -213,7 +213,7 @@ async def try_natural_language(update: Update, context: ContextTypes.DEFAULT_TYP
         parsed = await parse_memorization_input(text)
         if parsed["page"] is not None:
             async with AsyncSessionLocal() as session:
-                from ..services.user_service import get_or_create_user, set_initial_hifz
+                from user_service import get_or_create_user, set_initial_hifz
                 user = await get_or_create_user(session, telegram_id=update.effective_user.id)
                 await set_initial_hifz(session, user, parsed["page"])
             await update.message.reply_text(

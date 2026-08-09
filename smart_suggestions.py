@@ -6,7 +6,7 @@ from collections import Counter
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..models import User, ActivityLog, DailyProgress
+from models import User, ActivityLog, DailyProgress
 
 
 async def analyze_user_patterns(session: AsyncSession, user_id: int) -> dict:
@@ -59,7 +59,7 @@ async def generate_suggestions(session: AsyncSession, user: User) -> list[str]:
     if patterns["most_active_hour"] is not None:
         # نُحدِّد أيّ تذكير يقترح تغيير وقته
         hour = patterns["most_active_hour"]
-        from .. import config
+        import config
         # الحفظ غالبًا يتم في هذه الساعة
         suggestions.append(
             f"💡 لاحظتُ أنك غالبًا تنجز مهامك الساعة {hour:02d}:00. "
@@ -67,7 +67,7 @@ async def generate_suggestions(session: AsyncSession, user: User) -> list[str]:
         )
 
     if patterns["most_undone_task"]:
-        from .. import config
+        import config
         task_label = config.REMINDER_LABELS_AR.get(patterns["most_undone_task"], patterns["most_undone_task"])
         suggestions.append(
             f"📊 لاحظتُ أنك غالبًا تتراجع عن '{task_label}'. "
