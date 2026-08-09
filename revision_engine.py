@@ -13,9 +13,9 @@
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from .. import config
-from ..models import User, FarReviewCycle, MemorizationLog
-from .hifz_engine import get_today_hifz_assignment
+import config
+from models import User, FarReviewCycle, MemorizationLog
+from hifz_engine import get_today_hifz_assignment
 
 
 # ====== الحصن الرابع: مراجعة القريب ======

@@ -302,19 +302,61 @@ class TestListeningEngine(unittest.TestCase):
 class TestPrepEngine(unittest.TestCase):
     """اختبارات محرك التحضير."""
 
-    def test_weekly_prep_range(self):
-        """سيناريو: التحضير الأسبوعي محسوب ديناميكيًا."""
+    def test_weekly_prep_range_next_week_not_current(self):
+        """سيناريو أساسي: التحضير الأسبوعي = الأسبوع القادم، وليس الحالي.
+        
+        last_hifz=40, weekly=7
+        → هذا الأسبوع: 41 → 47
+        → تحضير الأسبوع القادم: 48 → 54
+        """
         user = make_user(last_hifz_page=40, daily_hifz_amount=1, weekly_hifz_amount=7)
         wp = get_weekly_prep_range(user)
-        self.assertEqual(wp["start"], 41)
-        self.assertEqual(wp["end"], 47)
-
-    def test_weekly_prep_changes_with_daily_amount(self):
-        """إذا تغيّر المقدار اليومي، يتغيّر التحضير الأسبوعي."""
-        user = make_user(last_hifz_page=40, daily_hifz_amount=2, weekly_hifz_amount=14)
-        wp = get_weekly_prep_range(user)
-        self.assertEqual(wp["start"], 41)
+        self.assertEqual(wp["start"], 48)
         self.assertEqual(wp["end"], 54)
+        self.assertEqual(wp["amount"], 7)
+
+    def test_weekly_prep_user_scenario_128_5(self):
+        """سيناريو المستخدم الإلزامي — يجب أن يمرّ هذا الاختبار إلزاميًا.
+        
+        current_page = 128 (أي next_hifz_page = 128، وبالتالي last_hifz_page = 127)
+        weekly_amount = 5
+        هذا الأسبوع: 128 → 132
+        تحضير الأسبوع القادم: 133 → 137 ✅
+        """
+        user = make_user(last_hifz_page=127, daily_hifz_amount=1, weekly_hifz_amount=5)
+        wp = get_weekly_prep_range(user)
+        self.assertEqual(wp["start"], 133, "يجب أن يبدأ التحضير عند الوجه 133")
+        self.assertEqual(wp["end"], 137, "يجب أن ينتهي التحضير عند الوجه 137")
+        self.assertEqual(wp["amount"], 5)
+
+    def test_weekly_prep_user_scenario_200_5(self):
+        """سيناريو المستخدم: current=200, weekly=5
+        هذا الأسبوع: 200 → 204
+        تحضير الأسبوع القادم: 205 → 209
+        """
+        user = make_user(last_hifz_page=199, weekly_hifz_amount=5)
+        wp = get_weekly_prep_range(user)
+        self.assertEqual(wp["start"], 205)
+        self.assertEqual(wp["end"], 209)
+
+    def test_weekly_prep_user_scenario_300_10(self):
+        """سيناريو المستخدم: current=300, weekly=10
+        هذا الأسبوع: 300 → 309
+        تحضير الأسبوع القادم: 310 → 319
+        """
+        user = make_user(last_hifz_page=299, weekly_hifz_amount=10)
+        wp = get_weekly_prep_range(user)
+        self.assertEqual(wp["start"], 310)
+        self.assertEqual(wp["end"], 319)
+
+    def test_weekly_prep_changes_with_weekly_amount(self):
+        """إذا تغيّر المقدار الأسبوعي، يتغيّر نطاق التحضير."""
+        user = make_user(last_hifz_page=40, weekly_hifz_amount=14)
+        wp = get_weekly_prep_range(user)
+        # هذا الأسبوع: 41 → 54
+        # الأسبوع القادم: 55 → 68
+        self.assertEqual(wp["start"], 55)
+        self.assertEqual(wp["end"], 68)
 
     def test_nightly_prep(self):
         """سيناريو: التحضير الليلي = وجه الغد."""
@@ -429,14 +471,17 @@ class TestUserService(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(count, 50)
 
     async def test_update_settings_recomputes_weekly_prep(self):
-        """تغيير المقدار يعيد حساب التحضير الأسبوعي."""
+        """تغيير المقدار الأسبوعي يعيد حساب التحضير (للأسبوع القادم)."""
         async with AsyncSessionLocal() as session:
             user = make_user(last_hifz_page=40, daily_hifz_amount=1, weekly_hifz_amount=7)
             session.add(user)
             await session.commit()
             await update_settings(session, user, weekly_amount=14)
             wp = get_weekly_prep_range(user)
-            self.assertEqual(wp["end"], 54)  # 41+14-1
+            # هذا الأسبوع: 41 → 54
+            # الأسبوع القادم: 55 → 68
+            self.assertEqual(wp["start"], 55)
+            self.assertEqual(wp["end"], 68)
 
 
 class TestMultiUser(unittest.IsolatedAsyncioTestCase):

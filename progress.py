@@ -8,15 +8,15 @@ from telegram import Update
 from telegram.constants import ParseMode
 from telegram.ext import ContextTypes
 
-from ..database import AsyncSessionLocal
-from ..models import MemorizationLog, ActivityLog
-from ..services.user_service import get_or_create_user
-from ..services.task_service import get_or_create_progress
-from ..engines.today_plan import compute_today_plan
-from ..ui.renderers import render_progress_dashboard, render_activity_log
-from ..ui.keyboards import back_to_today_inline
-from .utils import safe_edit_message, safe_send_message
-from .onboarding import start_onboarding
+from database import AsyncSessionLocal
+from models import MemorizationLog, ActivityLog
+from user_service import get_or_create_user
+from task_service import get_or_create_progress
+from today_plan import compute_today_plan
+from renderers import render_progress_dashboard, render_activity_log
+from keyboards import back_to_today_inline
+from utils import safe_edit_message, safe_send_message
+from onboarding import start_onboarding
 
 logger = logging.getLogger(__name__)
 

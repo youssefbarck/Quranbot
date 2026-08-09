@@ -62,9 +62,14 @@ def confirm_memorization(user: User) -> dict:
     new_last = assignment["end"]
     user.last_hifz_page = new_last
     user.next_hifz_page = new_last + 1
-    # تحديث نطاق التحضير الأسبوعي القادم
-    user.weekly_prep_start = new_last + 1
-    user.weekly_prep_end = min(config.QURAN_PAGE_COUNT, new_last + (user.weekly_hifz_amount or 7))
+    # تحديث نطاق التحضير الأسبوعي = الأسبوع القادم (بعد تجاوز مقدار الأسبوع الحالي)
+    weekly_amount = user.weekly_hifz_amount or config.DEFAULT_WEEKLY_HIFZ_AMOUNT
+    this_week_start = new_last + 1  # بداية الأسبوع الحالي الجديد بعد التقدّم
+    user.weekly_prep_start = this_week_start + weekly_amount
+    user.weekly_prep_end = min(
+        config.QURAN_PAGE_COUNT,
+        user.weekly_prep_start + weekly_amount - 1,
+    )
 
     return {
         "success": True,
@@ -79,10 +84,13 @@ def set_last_hifz_page(user: User, page: int) -> dict:
     page = max(0, min(int(page), config.QURAN_PAGE_COUNT))
     user.last_hifz_page = page
     user.next_hifz_page = page + 1 if page < config.QURAN_PAGE_COUNT else page
-    user.weekly_prep_start = page + 1 if page < config.QURAN_PAGE_COUNT else page
+    # التحضير الأسبوعي = الأسبوع القادم (بعد تجاوز مقدار الأسبوع الحالي)
+    weekly_amount = user.weekly_hifz_amount or config.DEFAULT_WEEKLY_HIFZ_AMOUNT
+    this_week_start = page + 1 if page < config.QURAN_PAGE_COUNT else page
+    user.weekly_prep_start = this_week_start + weekly_amount
     user.weekly_prep_end = min(
         config.QURAN_PAGE_COUNT,
-        user.weekly_prep_start + (user.weekly_hifz_amount or 7) - 1,
+        user.weekly_prep_start + weekly_amount - 1,
     )
     return {
         "last_hifz_page": user.last_hifz_page,
