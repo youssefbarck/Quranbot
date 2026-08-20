@@ -1,6 +1,6 @@
 """
 ╔══════════════════════════════════════════════════════════════════╗
-║                    بوت الحصون الخمسة — الإصدار 4.1.0                    ║
+║                    بوت الحصون الخمسة — الإصدار 4.1.1                    ║
 ║                  Quran Fortresses Bot — Single File Edition                ║
 ╠══════════════════════════════════════════════════════════════════╣
 ║  مرافقك الشخصي لحفظ القرآن الكريم وفق منهج الحصون الخمسة.               ║
@@ -32,7 +32,7 @@ import traceback
 import asyncio
 from collections import Counter
 from dataclasses import dataclass
-from datetime import date, date as date_cls, datetime, timedelta
+from datetime import date, date as date_cls, datetime, timedelta, timezone
 from typing import Optional
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 import sys
@@ -77,14 +77,13 @@ from telegram.error import (
     NetworkError,
     TimedOut,
 )
-from telegram.ext import ContextTypes
 from telegram.ext import (
     Application,
     ApplicationBuilder,
-    CommandHandler,
     CallbackQueryHandler,
-    MessageHandler,
+    CommandHandler,
     ContextTypes,
+    MessageHandler,
     filters,
 )
 
@@ -119,6 +118,7 @@ KEEPALIVE_INTERVAL = int(os.getenv("KEEPALIVE_INTERVAL", "280"))
 # (لا تُغيّر هذه القيم دون فهم تأثيرها على دورات الحفظ والمراجعة)
 
 QURAN_PAGE_COUNT = 604          # عدد أوجه المصحف
+PAGES_PER_HIZB = 10              # عدد أوجه كل حزب (ثابت دائمًا)
 QURAN_HIZB_COUNT = 60          # عدد الأحزاب (كل حزب = 10 أوجه)
 QURAN_JUZ_COUNT = 30           # عدد الأجزاء (كل جزء = 20 وجهًا)
 
@@ -400,10 +400,19 @@ def page_to_surah(page: int) -> SurahInfo | None:
 
 
 def get_surah_by_name(name: str) -> SurahInfo | None:
-    """بحث بالاسم العربي (مطابق جزئي)"""
+    """بحث بالاسم العربي — مطابقة كاملة أولًا، ثم بداية الكلمة."""
     name = name.strip()
+    # 1. مطابقة كاملة
     for s in SURAHS:
-        if s.name_ar == name or name in s.name_ar or s.name_ar in name:
+        if s.name_ar == name:
+            return s
+    # 2. الاسم مُدخل يبدأ باسم السورة (مثل: "المائدة" ← "المائدة")
+    for s in SURAHS:
+        if s.name_ar.startswith(name) and len(name) >= 3:
+            return s
+    # 3. اسم السورة يبدأ بالإدخال
+    for s in SURAHS:
+        if s.name_ar.startswith(name):
             return s
     return None
 
@@ -419,6 +428,7 @@ def get_surah_by_number(num: int) -> SurahInfo | None:
 RECITERS = {
     "الحصري": "https://server8.mp3quran.net/afs/",
     "العجمي": "https://server7.mp3quran.net/afs/",
+    # ملاحظة: الحصري والعجمي يشيران لنفس المسار حاليًا — راجع الروابط عند التخصيص
     "المعيقلي": "https://server11.mp3quran.net/maher/",
     "عبد الباسط": "https://server7.mp3quran.net/basit/",
     "السديس": "https://server13.mp3quran.net/sds/",
@@ -519,8 +529,8 @@ class User(Base):
     pre_session_started_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
 
     # ====== الطوابع الزمنية ======
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
     # العلاقات
     settings_rel: Mapped[list["UserSettings"]] = relationship(back_populates="user", cascade="all, delete-orphan")
@@ -589,7 +599,7 @@ class ActivityLog(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
     log_date: Mapped[date] = mapped_column(Date, default=date.today, index=True)
-    log_time: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    log_time: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
     event_type: Mapped[str] = mapped_column(String(32))  # memorize / reading_done / setting_change / ...
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
@@ -609,7 +619,7 @@ class FarReviewCycle(Base):
     cycle_start: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     cycle_end: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     last_completed_cycle: Mapped[int] = mapped_column(Integer, default=0)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
     user: Mapped["User"] = relationship(back_populates="far_review_state")
 
@@ -832,7 +842,8 @@ async def init_db():
     # تسجيل تشخيصي: نوع قاعدة البيانات
     is_pg = config.is_postgres()
     logger.info(f"📋 نوع قاعدة البيانات: {'PostgreSQL' if is_pg else 'SQLite'}")
-    logger.info(f"📋 رابط قاعدة البيانات: {config.DATABASE_URL[:30]}...")
+    _db_preview = "(مضبوط)" if config.DATABASE_URL else "(in-memory)"
+    logger.info(f"📋 قاعدة البيانات: {_db_preview}")
 
     # ── المعاملة 1: migrations ──
     # نجمع: العبارات الثابتة + العبارات المُولّدة ديناميكيًا من النموذج
@@ -1037,7 +1048,7 @@ def hizb_to_pages(hizb: int) -> tuple[int, int]:
     """حوّل رقم الحزب (1-60) إلى نطاق الأوجه (10 أوجه لكل حزب)."""
     hizb = max(1, min(hizb, config.QURAN_HIZB_COUNT))
     start = (hizb - 1) * config.DAILY_LISTENING_PAGES + 1
-    end = start + config.DAILY_LISTENING_PAGES - 1
+    end = start + PAGES_PER_HIZB - 1
     return start, end
 
 
@@ -1443,7 +1454,7 @@ def get_pre_session_prep_page(user: User) -> dict:
 
 def start_pre_session_timer(user: User) -> datetime:
     """بدء مؤقّت التحضير القبلي."""
-    user.pre_session_started_at = datetime.utcnow()
+    user.pre_session_started_at = datetime.now(timezone.utc)
     return user.pre_session_started_at
 
 
@@ -1451,7 +1462,7 @@ def end_pre_session_timer(user: User) -> int:
     """إنهاء المؤقّت — يُعيد عدد الدقائق المنقضية."""
     if not user.pre_session_started_at:
         return 0
-    duration = (datetime.utcnow() - user.pre_session_started_at).total_seconds() / 60.0
+    duration = (datetime.now(timezone.utc) - user.pre_session_started_at).total_seconds() / 60.0
     minutes = int(duration)
     user.pre_session_started_at = None
     return minutes
@@ -1461,7 +1472,7 @@ def get_pre_session_elapsed_minutes(user: User) -> int:
     """الوقت المنقضي منذ بدء المؤقّت (دقائق)."""
     if not user.pre_session_started_at:
         return 0
-    duration = (datetime.utcnow() - user.pre_session_started_at).total_seconds() / 60.0
+    duration = (datetime.now(timezone.utc) - user.pre_session_started_at).total_seconds() / 60.0
     return int(duration)
 
 
@@ -1936,11 +1947,16 @@ async def generate_suggestions(session: AsyncSession, user: User) -> list[str]:
 معالجات مساعدة مشتركة بين المعالجات الأخرى.
 """
 
-logger = logging.getLogger(__name__)
 
 
 async def safe_edit_message(query, text, reply_markup=None) -> bool:
-    """تحرير رسالة inline بسلامة — يتجاهل 'الرسالة لم تتغيّر'."""
+    """تحرير رسالة inline بسلامة — يتجاهل 'الرسالة لم تتغيّر'.
+
+    يقطع النص تلقائيًا إذا تجاوز 4096 حرف (حد تيليجرام).
+    """
+    # قطع النص إذا تجاوز الحد
+    if len(text) > 4000:
+        text = text[:3900] + "\n\n⏳ ... (الرسالة طويلة جدًا — بعض التفاصيل لم تُعرض)"
     try:
         await query.edit_message_text(
             text, parse_mode=ParseMode.HTML,
@@ -1962,7 +1978,9 @@ async def safe_edit_message(query, text, reply_markup=None) -> bool:
 
 
 async def safe_send_message(bot, chat_id, text, reply_markup=None) -> bool:
-    """إرسال آمن."""
+    """إرسال آمن — يقطع النص إذا تجاوز 4096 حرف."""
+    if len(text) > 4000:
+        text = text[:3900] + "\n\n⏳ ... (الرسالة طويلة جدًا)"
     try:
         await bot.send_message(
             chat_id=chat_id, text=text,
@@ -1998,6 +2016,55 @@ def main_keyboard() -> ReplyKeyboardMarkup:
         is_persistent=True,
         input_field_placeholder="اضغط أحد الأزرار بالأسفل ✨",
     )
+
+
+
+async def _handle_onboarding_text(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: int, state: str, text: str):
+    """معالجة الإدخال النصي لخطوات Onboarding 1-4."""
+    if state == "ob_step_1_memorization":
+        await process_onboarding_memorization(update, context, text)
+        return
+
+    if state == "ob_step_2_daily_amount_custom":
+        try:
+            amount = int(text.strip())
+            if not (1 <= amount <= 10):
+                raise ValueError
+        except (ValueError, TypeError):
+            await update.message.reply_text("❌ أدخلي رقمًا بين 1 و 10:", parse_mode=ParseMode.HTML)
+            return
+        async with AsyncSessionLocal() as session:
+            user = await get_or_create_user(session, telegram_id=user_id)
+            await update_settings(session, user, daily_amount=amount)
+        await ask_weekly_amount(update, context)
+        return
+
+    if state == "ob_step_3_weekly_amount_custom":
+        try:
+            amount = int(text.strip())
+            if not (1 <= amount <= 30):
+                raise ValueError
+        except (ValueError, TypeError):
+            await update.message.reply_text("❌ أدخلي رقمًا بين 1 و 30:", parse_mode=ParseMode.HTML)
+            return
+        async with AsyncSessionLocal() as session:
+            user = await get_or_create_user(session, telegram_id=user_id)
+            await update_settings(session, user, weekly_amount=amount)
+        await ask_plan_start_date(update, context)
+        return
+
+    if state == "ob_step_4_plan_start_manual":
+        try:
+            start_date = datetime.strptime(text.strip(), "%Y-%m-%d").date()
+        except (ValueError, TypeError):
+            await update.message.reply_text(
+                "❌ صيغة غير صحيحة. استخدمي <code>YYYY-MM-DD</code>:", parse_mode=ParseMode.HTML)
+            return
+        async with AsyncSessionLocal() as session:
+            user = await get_or_create_user(session, telegram_id=user_id)
+            await update_settings(session, user, plan_start_date=start_date)
+        await ask_reminder_times(update, context)
+        return
 
 
 # خريطة نصوص الـ ReplyKeyboard ← أوامر داخلية
@@ -2882,7 +2949,6 @@ def render_help() -> str:
 
 
 
-logger = logging.getLogger(__name__)
 
 # حالة الـ onboarding لكل مستخدم (مؤقتة في الذاكرة)
 ONBOARDING_STATE = {}  # user_id -> "step_name"
@@ -3156,7 +3222,6 @@ async def parse_memorization_input(text: str) -> dict:
 
 
 
-logger = logging.getLogger(__name__)
 
 
 async def _count_memorized(user_id: int) -> int:
@@ -3170,51 +3235,83 @@ async def _count_memorized(user_id: int) -> int:
 
 async def show_today_dashboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """يعرض ورد اليوم مع أزرار المهام الـ 8."""
-    async with AsyncSessionLocal() as session:
-        user = await get_or_create_user(session, update.effective_user.id)
-        if not user.onboarding_done:
-            await start_onboarding(update, context, welcome=False)
-            return
-        await update_user_activity(session, user)
-        progress = await get_or_create_progress(session, user.id)
-        plan = await compute_today_plan(session, user, progress)
+    try:
+        async with AsyncSessionLocal() as session:
+            user = await get_or_create_user(session, update.effective_user.id)
+            if not user.onboarding_done:
+                await start_onboarding(update, context, welcome=False)
+                return
+            await update_user_activity(session, user)
+            progress = await get_or_create_progress(session, user.id)
+            plan = await compute_today_plan(session, user, progress)
 
-    text = render_today_dashboard(plan)
-    reply_markup = today_dashboard_with_status(plan)
+        text = render_today_dashboard(plan)
+        reply_markup = today_dashboard_with_status(plan)
 
-    if update.message:
-        await update.message.reply_text(
-            text, parse_mode=ParseMode.HTML,
-            reply_markup=reply_markup,
-            disable_web_page_preview=True,
-        )
-    elif update.callback_query:
-        await safe_edit_message(update.callback_query, text, reply_markup)
+        if update.message:
+            await update.message.reply_text(
+                text, parse_mode=ParseMode.HTML,
+                reply_markup=reply_markup,
+                disable_web_page_preview=True,
+            )
+        elif update.callback_query:
+            await safe_edit_message(update.callback_query, text, reply_markup)
+    except Exception as e:
+        logger.error(f"show_today_dashboard فشل: {type(e).__name__}: {e}", exc_info=True)
+        try:
+            fallback = "📋 <b>ورد اليوم</b>\n\n⚠️ حدث خطأ أثناء تحميل البيانات."
+            if update.message:
+                await update.message.reply_text(
+                    fallback, parse_mode=ParseMode.HTML,
+                    reply_markup=main_keyboard(),
+                    disable_web_page_preview=True,
+                )
+            elif update.callback_query:
+                await safe_edit_message(update.callback_query, fallback, back_to_today_inline())
+        except Exception:
+            pass
+
 
 
 async def show_main_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """يعرض لوحة التحكم الشاملة — تجمع معظم الأساسيات في شاشة واحدة."""
-    async with AsyncSessionLocal() as session:
-        user = await get_or_create_user(session, update.effective_user.id)
-        if not user.onboarding_done:
-            await start_onboarding(update, context, welcome=False)
-            return
-        await update_user_activity(session, user)
-        progress = await get_or_create_progress(session, user.id)
-        plan = await compute_today_plan(session, user, progress)
+    try:
+        async with AsyncSessionLocal() as session:
+            user = await get_or_create_user(session, update.effective_user.id)
+            if not user.onboarding_done:
+                await start_onboarding(update, context, welcome=False)
+                return
+            await update_user_activity(session, user)
+            progress = await get_or_create_progress(session, user.id)
+            plan = await compute_today_plan(session, user, progress)
 
-    total_memorized = await _count_memorized(user.id)
-    text = render_main_panel(user, plan, total_memorized)
-    reply_markup = main_panel_inline(plan)
+        total_memorized = await _count_memorized(user.id)
+        text = render_main_panel(user, plan, total_memorized)
+        reply_markup = main_panel_inline(plan)
 
-    if update.message:
-        await update.message.reply_text(
-            text, parse_mode=ParseMode.HTML,
-            reply_markup=reply_markup,
-            disable_web_page_preview=True,
-        )
-    elif update.callback_query:
-        await safe_edit_message(update.callback_query, text, reply_markup)
+        if update.message:
+            await update.message.reply_text(
+                text, parse_mode=ParseMode.HTML,
+                reply_markup=reply_markup,
+                disable_web_page_preview=True,
+            )
+        elif update.callback_query:
+            await safe_edit_message(update.callback_query, text, reply_markup)
+    except Exception as e:
+        logger.error(f"show_main_panel فشل: {type(e).__name__}: {e}", exc_info=True)
+        try:
+            fallback = "🏠 <b>لوحة التحكم</b>\n\n⚠️ حدث خطأ أثناء تحميل البيانات."
+            if update.message:
+                await update.message.reply_text(
+                    fallback, parse_mode=ParseMode.HTML,
+                    reply_markup=main_keyboard(),
+                    disable_web_page_preview=True,
+                )
+            elif update.callback_query:
+                await safe_edit_message(update.callback_query, fallback, back_to_today_inline())
+        except Exception:
+            pass
+
 
 
 async def show_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -3223,12 +3320,12 @@ async def show_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.callback_query:
         await safe_edit_message(
             update.callback_query, text,
-            _btk(),
+            back_to_today_inline(),
         )
     elif update.message:
         await update.message.reply_text(
             text, parse_mode=ParseMode.HTML,
-            reply_markup=_btk(),
+            reply_markup=back_to_today_inline(),
             disable_web_page_preview=True,
         )
 
@@ -3312,7 +3409,6 @@ async def show_pre_session_start(update: Update, context: ContextTypes.DEFAULT_T
 
 
 
-logger = logging.getLogger(__name__)
 
 
 async def _get_plan(update: Update):
@@ -3408,7 +3504,6 @@ async def show_fortress_5(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 
-logger = logging.getLogger(__name__)
 
 
 async def show_progress(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -3471,7 +3566,6 @@ async def show_activity_log(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 
-logger = logging.getLogger(__name__)
 
 # حالة الإدخال اليدوي لكل مستخدم
 INPUT_STATE = {}  # user_id -> ("waiting_for_X", ...)
@@ -3511,8 +3605,8 @@ async def ask_last_page(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await safe_edit_message(update.callback_query, text, back_to_today_inline())
 
 
-async def ask_daily_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """تعديل المقدار اليومي."""
+async def settings_ask_daily(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """تعديل المقدار اليومي (من لوحة الإعدادات)."""
     if update.callback_query:
         text = (
             "📊 <b>تعديل المقدار اليومي</b>\n\n"
@@ -3521,8 +3615,8 @@ async def ask_daily_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await safe_edit_message(update.callback_query, text, daily_amount_inline())
 
 
-async def ask_weekly_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """تعديل المقدار الأسبوعي."""
+async def settings_ask_weekly(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """تعديل المقدار الأسبوعي (من لوحة الإعدادات)."""
     if update.callback_query:
         text = (
             "📚 <b>تعديل المقدار الأسبوعي</b>\n\n"
@@ -3730,7 +3824,6 @@ async def process_free_input(update: Update, context: ContextTypes.DEFAULT_TYPE,
 
 
 
-logger = logging.getLogger(__name__)
 
 
 # خريطة نصوص ReplyKeyboard
@@ -3764,8 +3857,8 @@ async def handle_free_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # 3. لو المستخدم في وضع الـ onboarding
     state = ONBOARDING_STATE.get(user_id)
-    if state == "ob_step_1_memorization":
-        await process_onboarding_memorization(update, context, text)
+    if state and state.startswith("ob_step_"):
+        await _handle_onboarding_text(update, context, user_id, state, text)
         return
 
     # 4. NLP بسيط لفهم أوامر عربية طبيعية
@@ -3825,7 +3918,15 @@ async def try_natural_language(update: Update, context: ContextTypes.DEFAULT_TYP
                 user = await get_or_create_user(session, telegram_id=update.effective_user.id)
                 # إذا الصفحة أكبر من last_hifz_page، نحدّث
                 if page > (user.last_hifz_page or 0):
-                    await set_initial_hifz(session, user, page)
+                    # تحديث آخر محفوظ بدون حذف السجل السابق
+                    old_last = user.last_hifz_page or 0
+                    user.last_hifz_page = page
+                    user.next_hifz_page = page + 1 if page < config.QURAN_PAGE_COUNT else page
+                    for p in range(old_last + 1, page + 1):
+                        session.add(MemorizationLog(
+                            user_id=user.id, page_number=p, date_memorized=date.today()
+                        ))
+                    await session.commit()
                     await update.message.reply_text(
                         f"✅ تم تسجيل حفظ الوجه <b>{page}</b> 🎉",
                         parse_mode=ParseMode.HTML,
@@ -3915,7 +4016,10 @@ async def try_natural_language(update: Update, context: ContextTypes.DEFAULT_TYP
         if parsed["page"] is not None:
             async with AsyncSessionLocal() as session:
                 user = await get_or_create_user(session, telegram_id=update.effective_user.id)
-                await set_initial_hifz(session, user, parsed["page"])
+                page = parsed["page"]
+                # تحديث بدون حذف السجل (استخدام set_last_hifz_page)
+                result = set_last_hifz_page(user, page)
+                await session.commit()
             await update.message.reply_text(
                 f"✅ تم ضبط آخر وجه محفوظ على <b>{parsed['page']}</b>",
                 parse_mode=ParseMode.HTML,
@@ -3937,7 +4041,6 @@ async def try_natural_language(update: Update, context: ContextTypes.DEFAULT_TYP
 
 
 
-logger = logging.getLogger(__name__)
 
 # خريطة أنواع المهام
 
@@ -4000,9 +4103,15 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     # ====== Onboarding: الخطوة 3 (مقدار أسبوعي) ======
-    m = re.match(r"^ob_weekly_(\d+)$", data)
+    m = re.match(r"^ob_weekly_(\d+|custom)$", data)
     if m:
-        amount = int(m.group(1))
+        val = m.group(1)
+        if val == "custom":
+            ONBOARDING_STATE[update.effective_user.id] = "ob_step_3_weekly_amount_custom"
+            text = "✍️ أرسلي رقمًا (1-30):"
+            await safe_edit_message(query, text, None)
+            return
+        amount = int(val)
         if amount in (5, 7, 10, 14):
             async with AsyncSessionLocal() as session:
                 user = await get_or_create_user(session, telegram_id=update.effective_user.id)
@@ -4140,28 +4249,42 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 
-logger = logging.getLogger(__name__)
 
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """الأمر /start — يبدأ الـ onboarding أو يعرض لوحة التحكم الشاملة."""
-    user_info = update.effective_user
-    async with AsyncSessionLocal() as session:
-        user = await get_or_create_user(session, user_info.id, user_info.username, user_info.full_name)
-        needs_onboarding = not user.onboarding_done
+    try:
+        user_info = update.effective_user
+        if not user_info:
+            logger.warning("start_command: effective_user is None")
+            return
+        async with AsyncSessionLocal() as session:
+            user = await get_or_create_user(session, user_info.id, user_info.username, user_info.full_name)
+            needs_onboarding = not user.onboarding_done
 
-    if needs_onboarding:
-        await start_onboarding(update, context, welcome=True)
-        return
+        if needs_onboarding:
+            await start_onboarding(update, context, welcome=True)
+            return
 
-    await update.message.reply_text(
-        f"👋 <b>أهلًا بعودتك!</b> 🌟\nإليكِ <b>لوحة التحكم</b> 👇",
-        parse_mode=ParseMode.HTML,
-        reply_markup=main_keyboard(),
-        disable_web_page_preview=True,
-    )
-    await show_main_panel(update, context)
-
+        await update.message.reply_text(
+            "👋 <b>أهلًا بعودتك!</b> 🌟\nإليكِ <b>لوحة التحكم</b> 👇",
+            parse_mode=ParseMode.HTML,
+            reply_markup=main_keyboard(),
+            disable_web_page_preview=True,
+        )
+        await show_main_panel(update, context)
+    except Exception as e:
+        logger.error(f"start_command فشل: {type(e).__name__}: {e}", exc_info=True)
+        try:
+            if update.message:
+                await update.message.reply_text(
+                    "⚠️ حدث خطأ أثناء التحميل. جرّب <code>/start</code> مرة أخرى.",
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=main_keyboard(),
+                    disable_web_page_preview=True,
+                )
+        except Exception:
+            pass
 
 async def today_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await show_today_dashboard(update, context)
@@ -4421,7 +4544,6 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 
-logger = logging.getLogger(__name__)
 
 
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -4466,7 +4588,16 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.warning(f"⚠️ خطأ شبكة: {error}")
         return
 
-    logger.error(f"❌ خطأ: {type(error).__name__}: {error}", exc_info=True)
+    user_id_str = ""
+    chat_id_str = ""
+    try:
+        if update and update.effective_user:
+            user_id_str = f" | user={update.effective_user.id}"
+        if update and update.effective_chat:
+            chat_id_str = f" | chat={update.effective_chat.id}"
+    except Exception:
+        pass
+    logger.error(f"❌ خطأ{user_id_str}{chat_id_str}: {type(error).__name__}: {error}", exc_info=True)
     if update and getattr(update, "effective_chat", None):
         try:
             if getattr(update, "callback_query", None):
@@ -4491,7 +4622,6 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 
-logger = logging.getLogger(__name__)
 
 scheduler = AsyncIOScheduler(timezone="UTC")
 
@@ -4611,7 +4741,6 @@ async def shutdown_scheduler():
 خادم Keep-alive بسيط — يبقي Render مستيقظًا.
 """
 
-logger = logging.getLogger(__name__)
 
 
 async def _health(request):
@@ -4642,7 +4771,7 @@ async def start_self_ping(interval: int = 280):
         async with aiohttp.ClientSession() as session:
             while True:
                 try:
-                    async with session.get(f"{public_url}/health", timeout=10) as resp:
+                    async with session.get(f"{public_url}/health", timeout=aiohttp.ClientTimeout(total=10)) as resp:
                         if resp.status == 200:
                             logger.debug("🔄 self-ping OK")
                         else:

@@ -17,10 +17,10 @@ services:
       - key: ADMIN_TELEGRAM_ID
         sync: false
       - key: DEFAULT_TIMEZONE
-        value: Africa/Algiers
+        value: "Africa/Algiers"
       - key: KEEPALIVE_ENABLED
         value: "true"
       - key: KEEPALIVE_INTERVAL
         value: "280"
-    healthCheckPath: /
+    healthCheckPath: /health
     autoDeploy: true
