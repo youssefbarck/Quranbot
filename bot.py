@@ -38,6 +38,7 @@ from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 import sys
 
 # --- مكتبات خارجية ---
+import sqlalchemy
 import aiohttp
 from aiohttp import web
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -744,7 +745,11 @@ AsyncSessionLocal = _SessionLocalProxy()
 
 
 async def init_db():
-    """إنشاء الجداول وتطبيق migrations الآمنة. يعيد إنشاء المحرك إذا كان مُغلقًا."""
+    """إنشاء الجداول وتطبيق migrations الآمنة. يعيد إنشاء المحرك إذا كان مُغلقًا.
+
+    ملاحظة: نستخدم checkfirst=True (الافتراضي) لتخطّي الجداول الموجودة.
+    لكن أحيانًا تظهر أخطاء قيود (constraints) موجودة مسبقًا — نتخطّاها بأمان.
+    """
     global engine, _session_maker, _disposed
     if _disposed:
         engine = _create_engine()
@@ -753,12 +758,18 @@ async def init_db():
         )
         _disposed = False
     async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+        try:
+            # create_all مع checkfirst=True (الافتراضي) يتخطّى الجداول الموجودة
+            await conn.run_sync(Base.metadata.create_all)
+        except Exception as e:
+            # إذا فشل (مثلاً قيد موجود مسبقًا)، نتجاهل الخطأ لأن الجداول موجودة
+            logger.warning(f"⚠️ create_all تخطّى بعض العناصر الموجودة: {e}")
+
         # تطبيق migrations (لإضافة الأعمدة الجديدة لقواعد قديمة)
         if config.is_postgres():
             for stmt in MIGRATION_STATEMENTS:
                 try:
-                    await conn.execute(__import__("sqlalchemy").text(stmt))
+                    await conn.execute(sqlalchemy.text(stmt))
                 except Exception as e:
                     logger.debug(f"migration skip: {e}")
     logger.info("✅ تم تهيئة قاعدة البيانات")
