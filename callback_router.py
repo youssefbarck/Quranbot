@@ -30,7 +30,6 @@ from progress import show_progress, show_activity_log
 from settings_panel import (
     show_settings_panel, ask_last_page, ask_daily_amount as settings_ask_daily,
     ask_weekly_amount as settings_ask_weekly,
-    ask_reading_hizb, ask_listening_hizb, ask_far_cycle,
     ask_notifications, show_reminders_settings, show_suggestions,
 )
 from utils import safe_edit_message
@@ -132,9 +131,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     # ====== التنقّل العام ======
-    if data == "main_panel":
-        await show_main_panel(update, context)
-        return
     if data == "today_dashboard":
         await show_today_dashboard(update, context)
         return
@@ -150,8 +146,8 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data == "show_help":
         await show_help(update, context)
         return
-    if data == "close_inline":
-        await safe_edit_message(query, "👇 اختَر من القائمة بالأسفل", None)
+    if data == "settings":
+        await show_settings_panel(update, context)
         return
     if data == "start_pre_session":
         await show_pre_session_start(update, context)
@@ -192,23 +188,11 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data == "set_weekly_amount":
         await settings_ask_weekly(update, context)
         return
-    if data == "set_reading_hizb":
-        await ask_reading_hizb(update, context)
-        return
-    if data == "set_listening_hizb":
-        await ask_listening_hizb(update, context)
-        return
-    if data == "set_far_cycle":
-        await ask_far_cycle(update, context)
-        return
     if data == "set_reminders":
         await show_reminders_settings(update, context)
         return
     if data == "set_notifications":
         await ask_notifications(update, context)
-        return
-    if data == "set_suggestions":
-        await show_suggestions(update, context)
         return
     # إعدادات سريعة (من لوحة الإعدادات)
     m = re.match(r"^ob_daily_(\d+)$", data)  # يطابق أيضًا أزرار الإعدادات السريعة
@@ -228,7 +212,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ====== تأكيد/إلغاء (للتعديلات اليدوية) ======
     if data == "cancel_action":
-        await show_settings_panel(update, context)
+        await show_today_dashboard(update, context)
         return
 
     logger.warning(f"callback_data غير معروف: {data}")

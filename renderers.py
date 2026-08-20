@@ -36,142 +36,126 @@ def fmt_range(start, end) -> str:
 
 
 def render_today_dashboard(plan: dict) -> str:
-    """عرض ورد اليوم — كل المهام في رسالة واحدة."""
+    """عرض ورد اليوم — مرتّب بالحصون مع أوضح تعليمات.
+    
+    التصميم الجديد:
+    - ملخّص علوي سريع (التاريخ + الالتزام + شريط الإنجاز)
+    - كل حصن بقسم منفصل مع عنوان واضح
+    - تعليمات مختصرة تشرح ما يجب فعله
+    """
     user: User = plan["user"]
     progress: DailyProgress = plan["progress"]
+    completed = plan["completed_count"]
 
     today_str = date.today().strftime("%Y-%m-%d")
     days_since = max(0, (date.today() - user.plan_start_date).days) + 1 if user.plan_start_date else 0
+    streak = user.streak_days or 0
 
-    # القراءة
+    # شريط إنجاز يومي (8 مهام)
+    bar_filled = completed
+    bar = "●" * bar_filled + "○" * (8 - bar_filled)
+
+    # بيانات الحصن الأول
     r = plan["reading"]
     r_info = plan["reading_info"]
-    reading_hizb_list = "+".join(str(h) for h in r["hizb_list"])
-    reading_done_icon = "✅" if progress.reading_done else "⬜"
-
-    # الاستماع
     l = plan["listening"]
     l_info = plan["listening_info"]
-    listening_done_icon = "✅" if progress.listening_done else "⬜"
 
-    # التحضير الأسبوعي
+    # بيانات الحصن الثاني
     wp = plan["weekly_prep"]
-    wp_done_icon = "✅" if progress.weekly_prep_done else "⬜"
-
-    # التحضير الليلي
     np_ = plan["nightly_prep"]
-    np_done_icon = "✅" if progress.nightly_prep_done else "⬜"
-
-    # التحضير القبلي
     ps = plan["pre_session"]
-    ps_done_icon = "✅" if progress.pre_session_prep_done else "⬜"
-    if plan["pre_session_active"]:
-        ps_status = f" ⏱️ <i>قيد التشغيل — {plan['pre_session_elapsed']} دقيقة</i>"
-    elif progress.pre_session_duration_min > 0:
-        ps_status = f" (<b>{progress.pre_session_duration_min} دقيقة</b>)"
-    else:
-        ps_status = ""
 
-    # الحفظ
+    # بيانات الحصن الثالث
     h = plan["hifz"]
-    memo_done_icon = "✅" if progress.memorize_done else "⬜"
 
-    # مراجعة القريب
+    # بيانات الحصن الرابع والخامس
     nr = plan["near_review"]
-    nr_done_icon = "✅" if progress.near_review_done else "⬜"
-
-    # مراجعة البعيد
     fr = plan["far_review"]
-    fr_done_icon = "✅" if progress.far_review_done else "⬜"
 
-    text_parts = [
+    # بناء الرسالة
+    parts = [
         f"📋 <b>ورد اليوم — {esc(today_str)}</b>",
-        f"📅 اليوم رقم <b>{days_since}</b> منذ بدأت الخطة",
-        f"🔥 أيام الالتزام: <b>{user.streak_days or 0} يوم</b>",
+        f"يوم رقم {bold(str(days_since))} | streak {bold(str(streak))} يوم",
+        f"الإنجاز: <code>{bar}</code> {bold(f'{completed}/8')}",
         "",
-        "━━━━━━━━━━━━━━━━",
-        f"{reading_done_icon} 📖 <b>القراءة</b> — الحزب {bold(reading_hizb_list)}",
-        f"   الأوجه {bold(fmt_range(r['pages_start'], r['pages_end']))}",
-        f"   الدورة {r_info['current_hizb']}/{r_info['total_in_cycle']} — ختمة #{r_info['current_khatmah_number']}",
-        "",
-        f"{listening_done_icon} 🎧 <b>الاستماع</b> — الحزب {bold(l['hizb'])}",
-        f"   الأوجه {bold(fmt_range(l['pages_start'], l['pages_end']))}",
-        f"   الدورة {l_info['current_hizb']}/{l_info['total_in_cycle']} — ختمة #{l_info['current_khatmah_number']}",
-        "",
-        "━━━━━━━━━━━━━━━━",
-        f"{wp_done_icon} 📚 <b>التحضير الأسبوعي</b>",
     ]
 
+    # ── الحصن الأول: التهيئة ──
+    parts.append("📖 <b>الحصن الأول — التهيئة</b>")
+    r_hizb_str = '+'.join(str(h_) for h_ in r["hizb_list"])
+    parts.append(
+        f"   قراءة: حزبان {bold(r_hizb_str)} | الأوجه {bold(fmt_range(r['pages_start'], r['pages_end']))}"
+    )
+    parts.append(
+        f"   استماع: حزب {bold(str(l['hizb']))} | الأوجه {bold(fmt_range(l['pages_start'], l['pages_end']))}"
+    )
+    parts.append(
+        f"   📖 ختمة قراءة #{r_info['current_khatmah_number']} ({r_info['percent']}%) | "
+        f"🎧 ختمة استماع #{l_info['current_khatmah_number']} ({l_info['percent']}%)"
+    )
+    parts.append("")
+
+    # ── الحصن الثاني: التحضير ──
+    parts.append("📚 <b>الحصن الثاني — التحضير</b>")
     if wp["start"] is not None:
-        text_parts.append(f"   الأوجه {bold(fmt_range(wp['start'], wp['end']))} ({wp['amount']} وجه)")
+        parts.append(f"   أسبوعي: الأوجه {bold(fmt_range(wp['start'], wp['end']))} ({wp['amount']} وجه)")
     else:
-        text_parts.append("   <i>أكملتِ القرآن — لا تحضير أسبوعي مطلوب</i>")
-
-    text_parts.extend([
-        "",
-        f"{np_done_icon} 🌙 <b>التحضير الليلي</b>",
-    ])
-
+        parts.append("   أسبوعي: <i>أكملتِ القرآن — لا تحضير مطلوب</i>")
     if np_["pages"]:
-        if len(np_["pages"]) == 1:
-            text_parts.append(f"   قبل النوم: اقرأ الوجه {bold(np_['start'])} استعدادًا للغد")
-        else:
-            text_parts.append(f"   قبل النوم: اقرأ الأوجه {bold(fmt_range(np_['start'], np_['end']))} استعدادًا للغد")
+        np_desc = f"الوجه {bold(str(np_['start']))}" if len(np_["pages"]) == 1 else f"الأوجه {bold(fmt_range(np_['start'], np_['end']))}"
+        parts.append(f"   ليلي: اقرأ {np_desc} قبل النوم")
     else:
-        text_parts.append("   <i>أكملتِ القرآن كاملًا 🎉</i>")
-
-    text_parts.extend([
-        "",
-        f"{ps_done_icon} ⏱️ <b>التحضير القبلي</b>",
-    ])
+        parts.append("   ليلي: <i>لا يوجد</i>")
     if ps["pages"]:
-        text_parts.append(f"   الوجه {bold(ps['start'])}{ps_status}")
+        ps_extra = ""
+        if plan["pre_session_active"]:
+            ps_extra = f" ⏱️ <i>جاري — {plan['pre_session_elapsed']} دقيقة</i>"
+        elif progress.pre_session_duration_min > 0:
+            ps_extra = f" (آخر مرة: {progress.pre_session_duration_min} دقيقة)"
+        parts.append(f"   قبلي: الوجه {bold(str(ps['start']))} — {config.PRE_SESSION_MINUTES} دقيقة{ps_extra}")
     else:
-        text_parts.append("   <i>لا يوجد</i>")
+        parts.append("   قبلي: <i>لا يوجد</i>")
+    parts.append("")
 
-    text_parts.extend([
-        "",
-        "━━━━━━━━━━━━━━━━",
-        f"{memo_done_icon} 🆕 <b>الحفظ</b>",
-    ])
+    # ── الحصن الثالث: الحفظ ──
+    parts.append("🆕 <b>الحصن الثالث — الحفظ الجديد</b>")
     if h["pages"]:
-        if len(h["pages"]) == 1:
-            text_parts.append(f"   اليوم: احفظ الوجه {bold(h['start'])}")
-        else:
-            text_parts.append(f"   اليوم: احفظ الأوجه {bold(fmt_range(h['start'], h['end']))}")
+        h_desc = f"الوجه {bold(str(h['start']))}" if len(h["pages"]) == 1 else f"الأوجه {bold(fmt_range(h['start'], h['end']))}"
+        surah = quran_data.page_to_surah(h["start"])
+        parts.append(f"   احفظ اليوم: {h_desc}")
+        if surah:
+            parts.append(f"   📖 من سورة {bold(surah.name_ar)} | مقدارك: {user.daily_hifz_amount} وجه/يوم")
     else:
-        text_parts.append("   <i>أكملتِ القرآن كاملًا 🎉</i>")
+        parts.append("   <i>أكملتِ القرآن كاملًا! 🎉</i>")
+    parts.append("")
 
-    text_parts.extend([
-        "",
-        "━━━━━━━━━━━━━━━━",
-        f"{nr_done_icon} 🔄 <b>مراجعة القريب</b>",
-    ])
+    # ── الحصن الرابع: مراجعة القريب ──
+    parts.append("🔄 <b>الحصن الرابع — مراجعة القريبة</b>")
     if nr["applicable"]:
-        text_parts.append(f"   الأوجه {bold(fmt_range(nr['start'], nr['end']))} (آخر 20 وجه محفوظ)")
+        parts.append(f"   الأوجه {bold(fmt_range(nr['start'], nr['end']))} — {nr['count']} وجه")
     else:
-        text_parts.append("   <i>لا ينطبق الآن — سيُفعَّل بعد حفظ أول وجه</i>")
+        parts.append("   <i>سيُفعَّل بعد حفظ أول وجه</i>")
+    parts.append("")
 
-    text_parts.extend([
-        "",
-        f"{fr_done_icon} 🔁 <b>مراجعة البعيد</b>",
-    ])
+    # ── الحصن الخامس: مراجعة البعيد ──
+    parts.append("🔁 <b>الحصن الخامس — مراجعة البعيدة</b>")
     if fr["applicable"]:
-        text_parts.append(
-            f"   الأوجه {bold(fmt_range(fr['cycle_start'], fr['cycle_end']))} "
-            f"(الدورة {fr['current_cycle']}/{fr['total_cycles']})"
+        parts.append(
+            f"   الأوجه {bold(fmt_range(fr['cycle_start'], fr['cycle_end']))} — "
+            f"الدورة {fr['current_cycle']}/{fr['total_cycles']}"
         )
     else:
-        text_parts.append("   <i>لا ينطبق الآن — سيُفعَّل بعد حفظ 20+ وجه</i>")
+        parts.append("   <i>سيُفعَّل بعد حفظ 20+ وجه</i>")
 
-    text_parts.extend([
+    # تذييل
+    parts.extend([
         "",
         "━━━━━━━━━━━━━━━━",
-        f"📊 <b>الإنجاز: {plan['completed_count']}/8 مهام</b>",
-        "👇 اضغط أي مهمة بالأسفل لتسجيلها أو التراجع عنها",
+        "💡 <i>اضغطي ⬜ لتسجيل إنجاز المهمة، أو ✅ للتراجع. التغيّر يظهر فورًا.</i>",
     ])
 
-    return "\n".join(text_parts)
+    return "\n".join(parts)
 
 
 def render_progress_dashboard(user: User, plan: dict, total_memorized: int) -> str:
@@ -445,132 +429,31 @@ def render_suggestions(suggestions: list) -> str:
 
 
 def render_main_panel(user: User, plan: dict, total_memorized: int) -> str:
-    """لوحة التحكم الشاملة — تجمع الإحصائيات الأساسية في شاشة واحدة منظّمة.
-
-    مستوحاة من بوتات المخزن الاحترافية: لا حاجة للتنقّل بين عدة شاشات.
-    كل ما يحتاجه المستخدم في الغالب موجود هنا.
-    """
-    h = plan["hifz"]
-    r_info = plan["reading_info"]
-    l_info = plan["listening_info"]
-    nr = plan["near_review"]
-    fr = plan["far_review"]
-    wp = plan["weekly_prep"]
-
-    pages_total = config.QURAN_PAGE_COUNT
-    percent = (total_memorized / pages_total * 100) if pages_total > 0 else 0
-    bar_filled = int(percent / 5)
-    bar = "█" * bar_filled + "░" * (20 - bar_filled)
-
-    today_str = date.today().strftime("%Y-%m-%d")
-    completed = plan.get("completed_count", 0)
-    remaining = 8 - completed
-
-    parts = [
-        "🏠 <b>لوحة التحكم</b>",
-        f"📅 {esc(today_str)}",
-        "",
-        "━━━━━━━━━━━━━━━━",
-        "📊 <b>تقدّمك في الحفظ</b>",
-        f"<code>{bar}</code>",
-        f"📖 {bold(f'{total_memorized} / {pages_total}')} وجه ({esc(f'{percent:.1f}%')})",
-        f"📍 آخر محفوظ: {bold(str(user.last_hifz_page or 0))}  "
-        f"🆕 التالي: {bold(str(user.next_hifz_page or 1))}",
-        "",
-        "━━━━━━━━━━━━━━━━",
-        "🔥 <b>الالتزام والإنجاز</b>",
-        f"   🔥 streak: {bold(f'{user.streak_days or 0} يوم')}",
-        f"   ✅ مهام اليوم: {bold(f'{completed}/8')}  ⏳ متبقٍّ: {bold(str(remaining))}",
-        f"   📚 مقدار يومي: {bold(f'{user.daily_hifz_amount} وجه')}  "
-        f"أسبوعي: {bold(f'{user.weekly_hifz_amount} وجه')}",
-        "",
-        "━━━━━━━━━━━━━━━━",
-        "📖 <b>الحصن الأول — التهيئة</b>",
-        f"   القراءة: حزب {bold(str(r_info['current_hizb']))}/{r_info['total_in_cycle']}  "
-        f"ختمة #{r_info['current_khatmah_number']}",
-        f"   الاستماع: حزب {bold(str(l_info['current_hizb']))}/{l_info['total_in_cycle']}  "
-        f"ختمة #{l_info['current_khatmah_number']}",
-    ]
-
-    parts.extend(["", "━━━━━━━━━━━━━━━━", "📚 <b>الحصن الثاني — التحضير</b>"])
-    if wp["start"] is not None:
-        parts.append(
-            f"   التحضير الأسبوعي (الأسبوع القادم): {bold(fmt_range(wp['start'], wp['end']))}"
-        )
-    else:
-        parts.append("   <i>أكملتِ القرآن — لا تحضير متبقٍّ</i>")
-    if h["pages"]:
-        if len(h["pages"]) == 1:
-            parts.append(f"   🌙 تحضير ليلي: اقرأ الوجه {bold(str(h['start']))}")
-        else:
-            parts.append(f"   🌙 تحضير ليلي: اقرأ {bold(fmt_range(h['start'], h['end']))}")
-
-    parts.extend(["", "━━━━━━━━━━━━━━━━", "🆕 <b>الحصن الثالث — الحفظ الجديد</b>"])
-    if h["pages"]:
-        if len(h["pages"]) == 1:
-            parts.append(f"   اليوم: احفظ الوجه {bold(str(h['start']))}")
-        else:
-            parts.append(f"   اليوم: احفظ {bold(fmt_range(h['start'], h['end']))}")
-    else:
-        parts.append("   <i>أكملتِ القرآن كاملًا 🎉</i>")
-
-    parts.extend(["", "━━━━━━━━━━━━━━━━", "🔄 <b>الحصن الرابع — مراجعة القريب</b>"])
-    if nr["applicable"]:
-        parts.append(
-            f"   {bold(str(nr['count']))} وجه قيد المراجعة ({nr['start']}→{nr['end']})"
-        )
-    else:
-        parts.append("   <i>سيُفعَّل بعد حفظ أول وجه</i>")
-
-    parts.extend(["", "━━━━━━━━━━━━━━━━", "🛡️ <b>الحصن الخامس — مراجعة البعيد</b>"])
-    if fr["applicable"]:
-        cycle_str = f"{fr['current_cycle']}/{fr['total_cycles']}"
-        parts.append(
-            f"   الدورة {bold(cycle_str)} "
-            f"({fr['cycle_start']}→{fr['cycle_end']})"
-        )
-    else:
-        parts.append("   <i>سيُفعَّل بعد حفظ 20+ وجه</i>")
-
-    parts.extend([
-        "",
-        "━━━━━━━━━━━━━━━━",
-        "👇 <b>الأزرار بالأسفل منظّمة بأقسام:</b>",
-        "   ✅/⬜ = مهام سريعة (اضغط للتسجيل/التراجع)",
-        "   🏰 = الحصون  • 📊 = التقدّم  • ⚙️ = الإعدادات",
-    ])
-    return "\n".join(parts)
+    """لوحة التحكم — نفس ورد اليوم (تم الدمج لتقليل التعقيد)."""
+    return render_today_dashboard(plan)
 
 
 def render_help() -> str:
-    """شاشة المساعدة المختصرة."""
+    """شاشة المساعدة — مبسّطة ومباشرة."""
     return (
-        "❓ <b>المساعدة — بوت الحصون الخمسة</b>\n\n"
+        "❓ <b>كيف تستخدمين البوت؟</b>\n\n"
+        "━━━━━━━━━━━━━━━━\n\n"
+        "1️⃣ <b>كل يوم يظهر وردك</b> (قراءة + استماع + حفظ + مراجعة)\n\n"
+        "2️⃣ <b>اضغطي زر ⬜</b> عند إنجاز أي مهمة — يتحوّل لـ ✅\n\n"
+        "3️⃣ <b>اضغطي زر ✅</b> مرة أخرى للتراجع (إذا ضغطتِ بالخطأ)\n\n"
+        "4️⃣ <b>القراءة والاستماع يتقدّمان</b> عند الضغط على ⬜ — كل يوم حزب جديد!\n\n"
         "━━━━━━━━━━━━━━━━\n"
-        "📋 <b>الأوامر الأساسية:</b>\n"
-        "   /start — بدء / إعادة ضبط\n"
-        "   /today — ورد اليوم\n"
-        "   /progress — لوحة التقدّم\n"
-        "   /help — هذه الشاشة\n\n"
-        "━━━━━━━━━━━━━━━━\n"
-        "💬 <b>أوامر طبيعية (مجرد كتابة نص):</b>\n"
-        "   • «وش نحفظ اليوم؟» → ورد اليوم\n"
-        "   • «وين وصلت؟» → التقدّم\n"
-        "   • «حفظت الوجه 41» → تسجيل الحفظ\n"
-        "   • «قريت الورد» → تأكيد القراءة\n"
-        "   • «أريد نغيّر الحفظ إلى 2» → تعديل المقدار\n\n"
-        "━━━━━━━━━━━━━━━━\n"
-        "🏰 <b>الحصون الخمسة:</b>\n"
-        "   1️⃣ التهيئة — قراءة (30 يوم) + استماع (60 يوم)\n"
+        "🏰 <b>الحصون الخمسة (باختصار):</b>\n"
+        "   1️⃣ التهيئة — قراءة 2 حزب + استماع 1 حزب يوميًا\n"
         "   2️⃣ التحضير — أسبوعي + ليلي + قبلي (15 د)\n"
-        "   3️⃣ الحفظ — الوجه القادم بناءً على التقدّم\n"
-        "   4️⃣ القريب — آخر 20 وجه محفوظ\n"
-        "   5️⃣ البعيد — 40 وجه/دورة (دورات مستقلة)\n\n"
+        "   3️⃣ الحفظ — الوجه الجديد\n"
+        "   4️⃣ مراجعة قريبة — آخر 20 وجه\n"
+        "   5️⃣ مراجعة بعيدة — 40 وجه/دورة\n\n"
         "━━━━━━━━━━━━━━━━\n"
-        "💡 <b>قواعد ذهبية:</b>\n"
-        "   • التحضير الأسبوعي دائمًا للأسبوع <b>القادم</b>\n"
-        "   • لا يتقدّم الحفظ تلقائيًا — يجب التأكيد\n"
-        "   • أزرار المهام قابلة للتراجع (toggle)\n"
-        "   • لا تُفقد البيانات بين الجلسات\n\n"
-        "<i>🤲 اللهم اجعل القرآن ربيع قلوبنا.</i>"
+        "💬 <b>يمكنك أيضًا الكتابة بالعربية:</b>\n"
+        "   «وش نحفظ اليوم؟» → ورد اليوم\n"
+        "   «وين وصلت؟» → التقدّم\n"
+        "   «حفظت الوجه 41» → تسجيل الحفظ\n"
+        "   «قريت الورد» → تسجيل القراءة\n\n"
+        "<i>🤲 اللهم اجعل القرآن ربيع قلوبنا</i>"
     )

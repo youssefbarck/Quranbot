@@ -16,9 +16,8 @@ from keyboards import (
     today_dashboard_with_status,
     pre_session_start_inline,
     back_to_today_inline,
-    main_panel_inline,
 )
-from renderers import render_today_dashboard, render_main_panel, render_help
+from renderers import render_today_dashboard, render_help
 from utils import safe_edit_message
 from onboarding import start_onboarding, ONBOARDING_STATE
 from sqlalchemy import select, func
@@ -61,28 +60,8 @@ async def show_today_dashboard(update: Update, context: ContextTypes.DEFAULT_TYP
 
 
 async def show_main_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """يعرض لوحة التحكم الشاملة — تجمع معظم الأساسيات في شاشة واحدة."""
-    async with AsyncSessionLocal() as session:
-        user = await get_or_create_user(session, update.effective_user.id)
-        if not user.onboarding_done:
-            await start_onboarding(update, context, welcome=False)
-            return
-        await update_user_activity(session, user)
-        progress = await get_or_create_progress(session, user.id)
-        plan = await compute_today_plan(session, user, progress)
-
-    total_memorized = await _count_memorized(user.id)
-    text = render_main_panel(user, plan, total_memorized)
-    reply_markup = main_panel_inline(plan)
-
-    if update.message:
-        await update.message.reply_text(
-            text, parse_mode=ParseMode.HTML,
-            reply_markup=reply_markup,
-            disable_web_page_preview=True,
-        )
-    elif update.callback_query:
-        await safe_edit_message(update.callback_query, text, reply_markup)
+    """لوحة التحكم = ورد اليوم (تم الدمج لتقليل التعقيد)."""
+    await show_today_dashboard(update, context)
 
 
 async def show_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -103,10 +82,10 @@ async def show_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def handle_task_button(update: Update, context: ContextTypes.DEFAULT_TYPE, task_type: str):
-    """معالجة ضغط زر مهمة — تبديل الحالة + إعادة عرض الواجهة.
-
-    ملاحظة: تعيد العرض في نفس الواجهة التي جاء منها الضغط (ورد اليوم أو لوحة التحكم).
-    نكتشف الواجهة الحالية من نص الرسالة الأصلي.
+    """معالجة ضغط زر مهمة — تبديل الحالة + إعادة عرض ورد اليوم.
+    
+    التصميم المبسّط: دائمًا نعود لورد اليوم بعد أي إجراء.
+    لا حاجة لمعرفة من أية شاشة جاء الضغط.
     """
     query = update.callback_query
     toast_text = None
@@ -140,23 +119,9 @@ async def handle_task_button(update: Update, context: ContextTypes.DEFAULT_TYPE,
         except Exception:
             pass
 
-    # اكتشاف الواجهة الحالية من نص الرسالة
-    current_text = ""
-    try:
-        if query.message and query.message.text:
-            current_text = query.message.text or ""
-    except Exception:
-        pass
-
-    if "لوحة التحكم" in current_text:
-        # عُد إلى لوحة التحكم
-        total_memorized = await _count_memorized(user.id)
-        text = render_main_panel(user, plan, total_memorized)
-        reply_markup = main_panel_inline(plan)
-    else:
-        # الافتراضي: ورد اليوم
-        text = render_today_dashboard(plan)
-        reply_markup = today_dashboard_with_status(plan)
+    # دائمًا نعرض ورد اليوم بعد الضغط
+    text = render_today_dashboard(plan)
+    reply_markup = today_dashboard_with_status(plan)
     await safe_edit_message(query, text, reply_markup)
 
 

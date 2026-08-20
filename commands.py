@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """الأمر /start — يبدأ الـ onboarding أو يعرض لوحة التحكم الشاملة."""
+    """الأمر /start — يبدأ الـ onboarding أو يعرض ورد اليوم مباشرة."""
     user_info = update.effective_user
     async with AsyncSessionLocal() as session:
         user = await get_or_create_user(session, user_info.id, user_info.username, user_info.full_name)
@@ -35,13 +35,14 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await start_onboarding(update, context, welcome=True)
         return
 
+    # بعد الـ onboarding: اعرض ورد اليوم مباشرة (الشاشة الرئيسية)
     await update.message.reply_text(
-        f"👋 <b>أهلًا بعودتك!</b> 🌟\nإليكِ <b>لوحة التحكم</b> 👇",
+        f"👋 <b>أهلًا بعودتك!</b> 👇",
         parse_mode=ParseMode.HTML,
         reply_markup=main_keyboard(),
         disable_web_page_preview=True,
     )
-    await show_main_panel(update, context)
+    await show_today_dashboard(update, context)
 
 
 async def today_command(update: Update, context: ContextTypes.DEFAULT_TYPE):

@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 
 # خريطة نصوص ReplyKeyboard
-from ui_helpers import KEYBOARD_TEXT_MAP
+from keyboards import KEYBOARD_TEXT_MAP
 
 
 async def handle_free_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
