@@ -745,10 +745,18 @@ AsyncSessionLocal = _SessionLocalProxy()
 
 
 async def init_db():
-    """إنشاء الجداول وتطبيق migrations الآمنة. يعيد إنشاء المحرك إذا كان مُغلقًا.
+    """تهيئة قاعدة البيانات — migrations أولاً، ثم create_all.
 
-    ملاحظة: نستخدم checkfirst=True (الافتراضي) لتخطّي الجداول الموجودة.
-    لكن أحيانًا تظهر أخطاء قيود (constraints) موجودة مسبقًا — نتخطّاها بأمان.
+    الترتيب الصحيح:
+    1. تنفيذ MIGRATION_STATEMENTS أولاً (ALTER TABLE ADD COLUMN IF NOT EXISTS)
+       هذا يُضيف الأعمدة الناقصة للجداول القديمة الموجودة في Neon.
+    2. ثم Base.metadata.create_all (ينشئ الجداول الجديدة فقط، checkfirst=True).
+
+    لماذا هذا الترتيب؟
+    - create_all لا يُضيف أعمدة لجداول موجودة (سلوك SQLAlchemy المعروف).
+    - إذا كانت قاعدة البيانات قديمة (بنية ناقصة)، create_all ينجح (الجدول موجود)
+      لكن SELECT سيفشل لاحقًا (عمود غير موجود).
+    - لذا نُضيف الأعمدة الناقصة يدويًا أولاً، ثم نُنشئ أي جداول جديدة.
     """
     global engine, _session_maker, _disposed
     if _disposed:
@@ -757,21 +765,27 @@ async def init_db():
             engine, class_=AsyncSession, expire_on_commit=False
         )
         _disposed = False
-    async with engine.begin() as conn:
-        try:
-            # create_all مع checkfirst=True (الافتراضي) يتخطّى الجداول الموجودة
-            await conn.run_sync(Base.metadata.create_all)
-        except Exception as e:
-            # إذا فشل (مثلاً قيد موجود مسبقًا)، نتجاهل الخطأ لأن الجداول موجودة
-            logger.warning(f"⚠️ create_all تخطّى بعض العناصر الموجودة: {e}")
 
-        # تطبيق migrations (لإضافة الأعمدة الجديدة لقواعد قديمة)
+
+    async with engine.begin() as conn:
+        # الخطوة 1: migrations — إضافة الأعمدة الناقصة للجداول الموجودة
+        # (هذا آمن لأن نستخدم ADD COLUMN IF NOT EXISTS)
         if config.is_postgres():
             for stmt in MIGRATION_STATEMENTS:
                 try:
                     await conn.execute(sqlalchemy.text(stmt))
                 except Exception as e:
                     logger.debug(f"migration skip: {e}")
+
+        # الخطوة 2: create_all — ينشئ الجداول الجديدة فقط (checkfirst=True)
+        # بعد migrations، كل الجداول الموجودة لها الأعمدة الصحيحة.
+        # create_all سيتخطّى الجداول الموجودة وينشئ فقط المفقودة.
+        try:
+            await conn.run_sync(Base.metadata.create_all)
+        except Exception as e:
+            # إذا فشل (نادرًا، مثل قيد موجود)، نتجاهل بأمان
+            logger.warning(f"⚠️ create_all تخطّى بعض العناصر: {e}")
+
     logger.info("✅ تم تهيئة قاعدة البيانات")
 
 
@@ -4458,14 +4472,24 @@ async def schedule_user_jobs(bot, user: User):
 
 
 async def schedule_all_users_jobs(bot):
-    """جدولة كل المستخدمين عند بدء التشغيل."""
-    async with AsyncSessionLocal() as session:
-        result = await session.execute(select(User).where(User.onboarding_done == True))
-        users = list(result.scalars().all())
+    """جدولة كل المستخدمين عند بدء التشغيل.
 
-    for user in users:
-        await schedule_user_jobs(bot, user)
-    logger.info(f"✅ تمت جدولة التذكيرات لـ {len(users)} مستخدم")
+    ملاحظة: إذا فشلت الجدولة لأي سبب، لا يمنع ذلك البوت من العمل.
+    """
+    try:
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(select(User).where(User.onboarding_done == True))
+            users = list(result.scalars().all())
+
+        for user in users:
+            try:
+                await schedule_user_jobs(bot, user)
+            except Exception as e:
+                logger.warning(f"⚠️ تعذّرت جدولة تذكيرات المستخدم {user.telegram_id}: {e}")
+        logger.info(f"✅ تمت جدولة التذكيرات لـ {len(users)} مستخدم")
+    except Exception as e:
+        logger.warning(f"⚠️ تعذّر تحميل المستخدمين للجدولة: {e}")
+        logger.warning("   البوت سيعمل بدون تذكيرات حتى تُحل المشكلة")
 
 
 async def start_scheduler():
