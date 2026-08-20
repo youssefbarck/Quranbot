@@ -177,7 +177,8 @@ def get_db_url_async() -> str:
 
 
 def is_postgres() -> bool:
-    return DATABASE_URL.startswith("postgresql://")
+    """يتحقق إذا كان رابط قاعدة البيانات هو PostgreSQL."""
+    return DATABASE_URL.startswith(("postgresql://", "postgres://"))
 
 # --- إنشاء كائن config كـ namespace ---
 # كل الثوابت معرّفة مباشرة أعلاه، لكن بقية الكود يستخدم config.XXX
@@ -745,18 +746,15 @@ AsyncSessionLocal = _SessionLocalProxy()
 
 
 async def init_db():
-    """تهيئة قاعدة البيانات — migrations أولاً، ثم create_all.
+    """تهيئة قاعدة البيانات — migrations و create_all في معاملات منفصلة.
 
-    الترتيب الصحيح:
-    1. تنفيذ MIGRATION_STATEMENTS أولاً (ALTER TABLE ADD COLUMN IF NOT EXISTS)
-       هذا يُضيف الأعمدة الناقصة للجداول القديمة الموجودة في Neon.
-    2. ثم Base.metadata.create_all (ينشئ الجداول الجديدة فقط، checkfirst=True).
+    نقطة حرجة: في PostgreSQL، إذا فشل أي statement في معاملة، تصبح المعاملة
+    "aborted" وكل التغييرات تُتراجع عند الـ commit. لذا يجب فصل migrations
+    عن create_all في معاملات منفصلة، وإلا فقد تُتراجع migrations إذا فشل create_all.
 
-    لماذا هذا الترتيب؟
-    - create_all لا يُضيف أعمدة لجداول موجودة (سلوك SQLAlchemy المعروف).
-    - إذا كانت قاعدة البيانات قديمة (بنية ناقصة)، create_all ينجح (الجدول موجود)
-      لكن SELECT سيفشل لاحقًا (عمود غير موجود).
-    - لذا نُضيف الأعمدة الناقصة يدويًا أولاً، ثم نُنشئ أي جداول جديدة.
+    الترتيب:
+    1. معاملة منفصلة: MIGRATION_STATEMENTS (ALTER TABLE ADD COLUMN IF NOT EXISTS)
+    2. معاملة منفصلة: Base.metadata.create_all (ينشئ الجداول الجديدة فقط)
     """
     global engine, _session_maker, _disposed
     if _disposed:
@@ -767,24 +765,50 @@ async def init_db():
         _disposed = False
 
 
-    async with engine.begin() as conn:
-        # الخطوة 1: migrations — إضافة الأعمدة الناقصة للجداول الموجودة
-        # (هذا آمن لأن نستخدم ADD COLUMN IF NOT EXISTS)
-        if config.is_postgres():
-            for stmt in MIGRATION_STATEMENTS:
-                try:
-                    await conn.execute(sqlalchemy.text(stmt))
-                except Exception as e:
-                    logger.debug(f"migration skip: {e}")
+    # تسجيل تشخيصي: نوع قاعدة البيانات
+    is_pg = config.is_postgres()
+    logger.info(f"📋 نوع قاعدة البيانات: {'PostgreSQL' if is_pg else 'SQLite'}")
+    logger.info(f"📋 رابط قاعدة البيانات: {config.DATABASE_URL[:30]}...")
 
-        # الخطوة 2: create_all — ينشئ الجداول الجديدة فقط (checkfirst=True)
-        # بعد migrations، كل الجداول الموجودة لها الأعمدة الصحيحة.
-        # create_all سيتخطّى الجداول الموجودة وينشئ فقط المفقودة.
-        try:
+    # ── المعاملة 1: migrations ──
+    # كل ALTER TABLE ADD COLUMN IF NOT EXISTS في معاملته الخاصة
+    # (إذا فشلت واحدة، لا تؤثر على الباقي)
+    if is_pg:
+        logger.info(f"📋 تنفيذ {len(MIGRATION_STATEMENTS)} جملة migration...")
+        success_count = 0
+        for stmt in MIGRATION_STATEMENTS:
+            try:
+                async with engine.begin() as conn:
+                    await conn.execute(sqlalchemy.text(stmt))
+                success_count += 1
+            except Exception as e:
+                logger.debug(f"migration skip: {stmt[:60]}... → {e}")
+        logger.info(f"✅ migrations: {success_count}/{len(MIGRATION_STATEMENTS)} نجحت")
+
+    # ── المعاملة 2: create_all ──
+    # ينشئ الجداول الجديدة فقط (checkfirst=True). في معاملة منفصلة تمامًا.
+    try:
+        async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
+        logger.info("✅ create_all اكتمل")
+    except Exception as e:
+        logger.warning(f"⚠️ create_all تخطّى بعض العناصر: {e}")
+
+    # ── التحقق: هل الأعمدة موجودة فعلاً؟ ──
+    if is_pg:
+        try:
+            async with engine.begin() as conn:
+                result = await conn.execute(sqlalchemy.text(
+                    "SELECT column_name FROM information_schema.columns "
+                    "WHERE table_name='users' AND column_name='last_hifz_page'"
+                ))
+                row = result.first()
+                if row:
+                    logger.info("✅ التحقق: عمود last_hifz_page موجود في جدول users")
+                else:
+                    logger.error("❌ التحقق: عمود last_hifz_page غير موجود بعد!")
         except Exception as e:
-            # إذا فشل (نادرًا، مثل قيد موجود)، نتجاهل بأمان
-            logger.warning(f"⚠️ create_all تخطّى بعض العناصر: {e}")
+            logger.warning(f"⚠️ تعذّر التحقق من الأعمدة: {e}")
 
     logger.info("✅ تم تهيئة قاعدة البيانات")
 
