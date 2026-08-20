@@ -634,6 +634,10 @@ MIGRATION_STATEMENTS = [
     "ALTER TABLE users ADD COLUMN IF NOT EXISTS weekly_prep_end INTEGER",
     "ALTER TABLE users ADD COLUMN IF NOT EXISTS pre_session_started_at TIMESTAMP",
     "ALTER TABLE users ADD COLUMN IF NOT EXISTS timezone VARCHAR(64) DEFAULT 'Africa/Algiers'",
+    "ALTER TABLE users ADD COLUMN IF NOT EXISTS username VARCHAR(64)",
+    "ALTER TABLE users ADD COLUMN IF NOT EXISTS full_name VARCHAR(128)",
+    "ALTER TABLE users ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT NOW()",
+    "ALTER TABLE users ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW()",
     # daily_progress
     "ALTER TABLE daily_progress ADD COLUMN IF NOT EXISTS weekly_prep_done BOOLEAN DEFAULT FALSE",
     "ALTER TABLE daily_progress ADD COLUMN IF NOT EXISTS nightly_prep_done BOOLEAN DEFAULT FALSE",
@@ -642,7 +646,67 @@ MIGRATION_STATEMENTS = [
     "ALTER TABLE daily_progress ADD COLUMN IF NOT EXISTS near_review_done BOOLEAN DEFAULT FALSE",
     "ALTER TABLE daily_progress ADD COLUMN IF NOT EXISTS far_review_done BOOLEAN DEFAULT FALSE",
     "ALTER TABLE daily_progress ADD COLUMN IF NOT EXISTS task_status VARCHAR(16) DEFAULT 'pending'",
+    "ALTER TABLE daily_progress ADD COLUMN IF NOT EXISTS reading_done BOOLEAN DEFAULT FALSE",
+    "ALTER TABLE daily_progress ADD COLUMN IF NOT EXISTS listening_done BOOLEAN DEFAULT FALSE",
+    "ALTER TABLE daily_progress ADD COLUMN IF NOT EXISTS memorize_done BOOLEAN DEFAULT FALSE",
+    # activity_log (جدول قد يكون مفقودًا)
+    "CREATE TABLE IF NOT EXISTS activity_log (id SERIAL PRIMARY KEY, user_id INTEGER NOT NULL, log_date DATE DEFAULT CURRENT_DATE, log_time TIMESTAMP DEFAULT NOW(), event_type VARCHAR(32), description TEXT)",
+    # far_review_cycle (جدول قد يكون مفقودًا)
+    "CREATE TABLE IF NOT EXISTS far_review_cycle (id SERIAL PRIMARY KEY, user_id INTEGER UNIQUE NOT NULL, current_cycle INTEGER DEFAULT 1, cycle_start INTEGER, cycle_end INTEGER, last_completed_cycle INTEGER DEFAULT 0, updated_at TIMESTAMP DEFAULT NOW())",
 ]
+
+
+def generate_migrations_from_model() -> list[str]:
+    """يُولّد عبارات ALTER TABLE ADD COLUMN IF NOT EXISTS تلقائيًا من النموذج.
+
+    هذا يضمن عدم تفويت أي عمود جديد يُضاف للنموذج مستقبلاً.
+    كل عمود في كل جدول يُترجم إلى عبارة ALTER TABLE آمنة.
+    """
+
+    # خريطة أنواع SQLAlchemy ← أنواع PostgreSQL
+    TYPE_MAP = {
+        String: lambda col: f"VARCHAR({col.type.length or 256})",
+        Integer: lambda col: "INTEGER",
+        BigInteger: lambda col: "BIGINT",
+        Boolean: lambda col: "BOOLEAN",
+        DateTime: lambda col: "TIMESTAMP",
+        Date: lambda col: "DATE",
+        Text: lambda col: "TEXT",
+        Float: lambda col: "FLOAT",
+    }
+
+    statements = []
+    for table_name, table in Base.metadata.tables.items():
+        for column in table.columns:
+            # تحديد نوع PostgreSQL المناسب
+            pg_type = "TEXT"  # افتراضي
+            for sa_type, type_fn in TYPE_MAP.items():
+                if isinstance(column.type, sa_type):
+                    pg_type = type_fn(column)
+                    break
+
+            # بناء عبارة DEFAULT
+            default_clause = ""
+            if column.default is not None:
+                val = column.default.arg
+                if callable(val):
+                    # default=datetime.utcnow → استخدم NOW()
+                    if "datetime" in str(val):
+                        default_clause = " DEFAULT NOW()"
+                    elif "date" in str(val):
+                        default_clause = " DEFAULT CURRENT_DATE"
+                else:
+                    if isinstance(val, bool):
+                        default_clause = f" DEFAULT {str(val).upper()}"
+                    elif isinstance(val, str):
+                        default_clause = f" DEFAULT '{val}'"
+                    elif isinstance(val, (int, float)):
+                        default_clause = f" DEFAULT {val}"
+
+            stmt = f"ALTER TABLE {table_name} ADD COLUMN IF NOT EXISTS {column.name} {pg_type}{default_clause}"
+            statements.append(stmt)
+
+    return statements
 
 # ══════════════════════════════════════════════════════════════════════
 # ═══ 4. طبقة قاعدة البيانات ═══
@@ -771,19 +835,28 @@ async def init_db():
     logger.info(f"📋 رابط قاعدة البيانات: {config.DATABASE_URL[:30]}...")
 
     # ── المعاملة 1: migrations ──
-    # كل ALTER TABLE ADD COLUMN IF NOT EXISTS في معاملته الخاصة
-    # (إذا فشلت واحدة، لا تؤثر على الباقي)
+    # نجمع: العبارات الثابتة + العبارات المُولّدة ديناميكيًا من النموذج
+    # هذا يضمن عدم تفويت أي عمود (مثل updated_at الذي كان مفقودًا سابقًا)
     if is_pg:
-        logger.info(f"📋 تنفيذ {len(MIGRATION_STATEMENTS)} جملة migration...")
+        all_migrations = list(MIGRATION_STATEMENTS) + generate_migrations_from_model()
+        # إزالة التكرار (نفس العبارة قد تظهر مرتين)
+        seen = set()
+        unique_migrations = []
+        for stmt in all_migrations:
+            if stmt not in seen:
+                seen.add(stmt)
+                unique_migrations.append(stmt)
+
+        logger.info(f"📋 تنفيذ {len(unique_migrations)} جملة migration...")
         success_count = 0
-        for stmt in MIGRATION_STATEMENTS:
+        for stmt in unique_migrations:
             try:
                 async with engine.begin() as conn:
                     await conn.execute(sqlalchemy.text(stmt))
                 success_count += 1
             except Exception as e:
                 logger.debug(f"migration skip: {stmt[:60]}... → {e}")
-        logger.info(f"✅ migrations: {success_count}/{len(MIGRATION_STATEMENTS)} نجحت")
+        logger.info(f"✅ migrations: {success_count}/{len(unique_migrations)} نجحت")
 
     # ── المعاملة 2: create_all ──
     # ينشئ الجداول الجديدة فقط (checkfirst=True). في معاملة منفصلة تمامًا.
