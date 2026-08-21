@@ -55,7 +55,6 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
-    delete,
     func,
     select,
 )
@@ -78,7 +77,6 @@ from telegram.error import (
     TimedOut,
 )
 from telegram.ext import (
-    Application,
     ApplicationBuilder,
     CallbackQueryHandler,
     CommandHandler,
@@ -187,7 +185,7 @@ def is_postgres() -> bool:
 # --- إنشاء كائن config كـ namespace ---
 # كل الثوابت معرّفة مباشرة أعلاه، لكن بقية الكود يستخدم config.XXX
 # فننشئ كائنًا بسيطًا يحتوي عليها كلها للتوافقية
-import types as _types
+import types as _types  # noqa: E402
 config = _types.SimpleNamespace(
     BOT_TOKEN=BOT_TOKEN, DATABASE_URL=DATABASE_URL, ADMIN_ID=ADMIN_ID,
     DEFAULT_TIMEZONE=DEFAULT_TIMEZONE, PORT=PORT,
@@ -2477,7 +2475,7 @@ def render_today_dashboard(plan: dict) -> str:
     reading_done_icon = "✅" if progress.reading_done else "⬜"
 
     # الاستماع
-    l = plan["listening"]
+    lst = plan["listening"]
     l_info = plan["listening_info"]
     listening_done_icon = "✅" if progress.listening_done else "⬜"
 
@@ -2500,7 +2498,6 @@ def render_today_dashboard(plan: dict) -> str:
         ps_status = ""
 
     # الحفظ
-    h = plan["hifz"]
     memo_done_icon = "✅" if progress.memorize_done else "⬜"
 
     # مراجعة القريب
@@ -2603,7 +2600,6 @@ def render_today_dashboard(plan: dict) -> str:
 
 def render_progress_dashboard(user: User, plan: dict, total_memorized: int) -> str:
     """عرض شاشة التقدم."""
-    h = plan["hifz"]
     r_info = plan["reading_info"]
     l_info = plan["listening_info"]
     nr = plan["near_review"]
@@ -2662,7 +2658,7 @@ def render_fortress_1(plan: dict) -> str:
     """الحصن الأول — التهيئة."""
     r = plan["reading"]
     r_info = plan["reading_info"]
-    l = plan["listening"]
+    lst = plan["listening"]
     l_info = plan["listening_info"]
     parts = [
         "📖 <b>الحصن الأول — التهيئة المستمرة</b>",
@@ -2737,17 +2733,17 @@ def render_fortress_2(plan: dict) -> str:
 
 def render_fortress_3(plan: dict) -> str:
     """الحصن الثالث — الحفظ الجديد."""
-    h = plan["hifz"]
+    hifz = plan["hifz"]
     user = plan["user"]
     parts = [
         "🆕 <b>الحصن الثالث — الحفظ الجديد</b>",
         "",
         "━━━━━━━━━━━━━━━━",
     ]
-    if h["pages"]:
-        parts.append(f"📍 الأوجه المطلوبة: <b>{fmt_range(h['start'], h['end'])}</b>")
-        surah = quran_data.page_to_surah(h["start"])
-        juz = quran_data.page_to_juz(h["start"])
+    if hifz["pages"]:
+        parts.append(f"📍 الأوجه المطلوبة: <b>{fmt_range(hifz['start'], hifz['end'])}</b>")
+        surah = quran_data.page_to_surah(hifz["start"])
+        juz = quran_data.page_to_juz(hifz["start"])
         parts.append(f"📖 السورة: <b>{esc(surah.name_ar)}</b>")
         parts.append(f"📚 الجزء: <b>{juz}</b>")
         parts.append(f"📊 المقدار: <b>{user.daily_hifz_amount} وجه/يوم</b>")
@@ -2876,7 +2872,7 @@ def render_main_panel(user: User, plan: dict, total_memorized: int) -> str:
     مستوحاة من بوتات المخزن الاحترافية: لا حاجة للتنقّل بين عدة شاشات.
     كل ما يحتاجه المستخدم في الغالب موجود هنا.
     """
-    h = plan["hifz"]
+    hifz = plan["hifz"]
     r_info = plan["reading_info"]
     l_info = plan["listening_info"]
     nr = plan["near_review"]
@@ -2925,18 +2921,18 @@ def render_main_panel(user: User, plan: dict, total_memorized: int) -> str:
         )
     else:
         parts.append("   <i>أكملتِ القرآن — لا تحضير متبقٍّ</i>")
-    if h["pages"]:
-        if len(h["pages"]) == 1:
-            parts.append(f"   🌙 تحضير ليلي: اقرأ الوجه {bold(str(h['start']))}")
+    if hifz["pages"]:
+        if len(hifz["pages"]) == 1:
+            parts.append(f"   🌙 تحضير ليلي: اقرأ الوجه {bold(str(hifz['start']))}")
         else:
-            parts.append(f"   🌙 تحضير ليلي: اقرأ {bold(fmt_range(h['start'], h['end']))}")
+            parts.append(f"   🌙 تحضير ليلي: اقرأ {bold(fmt_range(hifz['start'], hifz['end']))}")
 
     parts.extend(["", "━━━━━━━━━━━━━━━━", "🆕 <b>الحصن الثالث — الحفظ الجديد</b>"])
-    if h["pages"]:
-        if len(h["pages"]) == 1:
-            parts.append(f"   اليوم: احفظ الوجه {bold(str(h['start']))}")
+    if hifz["pages"]:
+        if len(hifz["pages"]) == 1:
+            parts.append(f"   اليوم: احفظ الوجه {bold(str(hifz['start']))}")
         else:
-            parts.append(f"   اليوم: احفظ {bold(fmt_range(h['start'], h['end']))}")
+            parts.append(f"   اليوم: احفظ {bold(fmt_range(hifz['start'], hifz['end']))}")
     else:
         parts.append("   <i>أكملتِ القرآن كاملًا 🎉</i>")
 
@@ -4420,7 +4416,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     await update.message.reply_text(
-        f"👋 <b>أهلًا بعودتك!</b> 🌟\nإليكِ <b>لوحة التحكم</b> 👇",
+        "👋 <b>أهلًا بعودتك!</b> 🌟\nإليكِ <b>لوحة التحكم</b> 👇",
         parse_mode=ParseMode.HTML,
         reply_markup=main_keyboard(),
         disable_web_page_preview=True,
@@ -4536,7 +4532,8 @@ async def settime_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         hour, minute = time_str.split(":")
-        int(hour); int(minute)
+        int(hour)
+        int(minute)
         if not (0 <= int(hour) <= 23 and 0 <= int(minute) <= 59):
             raise ValueError
     except (ValueError, IndexError):
@@ -4696,8 +4693,10 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if isinstance(error, Conflict):
         logger.warning(f"⚠️ Conflict (تجاهل): {error}")
         if update and getattr(update, "callback_query", None):
-            try: await update.callback_query.answer()
-            except Exception: pass
+            try:
+                await update.callback_query.answer()
+            except Exception:
+                pass
         return
 
     if isinstance(error, TimedOut):
@@ -4716,8 +4715,10 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if update and getattr(update, "effective_chat", None):
             try:
                 if getattr(update, "callback_query", None):
-                    try: await update.callback_query.answer()
-                    except Exception: pass
+                    try:
+                        await update.callback_query.answer()
+                    except Exception:
+                        pass
                 await context.bot.send_message(
                     chat_id=update.effective_chat.id,
                     text="⚠️ حدث خطأ بسيط. جرّب مرة أخرى أو /start",
@@ -4735,8 +4736,10 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update and getattr(update, "effective_chat", None):
         try:
             if getattr(update, "callback_query", None):
-                try: await update.callback_query.answer()
-                except Exception: pass
+                try:
+                    await update.callback_query.answer()
+                except Exception:
+                    pass
             await context.bot.send_message(
                 chat_id=update.effective_chat.id,
                 text="⚠️ حدث خطأ غير متوقع. جرّب مرة أخرى أو /start",
@@ -4840,7 +4843,7 @@ async def schedule_all_users_jobs(bot):
     """
     try:
         async with AsyncSessionLocal() as session:
-            result = await session.execute(select(User).where(User.onboarding_done == True))
+            result = await session.execute(select(User).where(User.onboarding_done))
             users = list(result.scalars().all())
 
         for user in users:
@@ -5029,7 +5032,7 @@ def main():
         sys.stdout.flush()
         sys.stderr.flush()
         raise
-    except Exception as e:
+    except Exception:
         print("❌ خطأ أثناء التشغيل:", flush=True)
         print(traceback.format_exc(), flush=True)
         logger.error("❌ خطأ أثناء التشغيل:")
