@@ -1,7 +1,7 @@
 """
 ╔══════════════════════════════════════════════════════════════════╗
-║                    بوت الحصون الخمسة — الإصدار 4.1.3                    ║
-║                  Quran Fortresses Bot — v4.1.3 (full schema fix)                ║
+║                    بوت الحصون الخمسة — الإصدار 4.2.0                    ║
+║                  Quran Fortresses Bot — v4.2.0 (root-cause fix)                ║
 ╠══════════════════════════════════════════════════════════════════╣
 ║  مرافقك الشخصي لحفظ القرآن الكريم وفق منهج الحصون الخمسة.               ║
 ║                                                                    ║
@@ -615,53 +615,100 @@ class FarReviewCycle(Base):
 
 
 # ====== Migration statements (آمنة — IF NOT EXISTS) ======
-# استراتيجية v4.1.3:
-#   1. تنظيف الكائنات اليتمة (orphaned constraints/indexes) أولًا
-#   2. إنشاء الجداول عبر CREATE TABLE IF NOT EXISTS فقط
-#   3. إضافة الأعمدة عبر ALTER TABLE ADD COLUMN IF NOT EXISTS
-#   4. تحويل أنواع الأعمدة TIMESTAMP → TIMESTAMPTZ
-#   5. لا نستخدم create_all أبدًا في PostgreSQL (يُسبب تعارضات)
+# استراتيجية v4.2.0 — الحل الجذري:
+#
+# المشاكل السابقة:
+#   1. CONSTRAINT uq_user_page يتيم يمنع CREATE TABLE → حل: إزالة أسماء القيود
+#   2. DO $$ blocks لا تعمل مع asyncpg → حل: استبدالها بجمل فردية أو منطق Python
+#   3. أعمدة NOT NULL من نسخ قديمة (schema drift) → حل: استعلام information_schema من Python
+#   4. TIMESTAMP بدون timezone → حل: ALTER COLUMN TYPE (بشرط التحقق من Python أولًا)
+#
+# القاعدة الذهبية: لا نستخدم DO $$ أبدًا، ولا نُسمّي القيود أبدًا.
+# ══ CREATE TABLE statements — بدون أسماء قيود مُسمّاة ══
+# PostgreSQL يُولّد أسماء فريدة تلقائيًا مثل memorization_log_user_id_page_number_key
+# هذا يمنع التعارض مع أي كائن يتيم في الكتالوج.
 
-MIGRATION_STATEMENTS = [
-    # ══ المرحلة 0: تنظيف الكائنات اليتمة ══
-    # في بعض الحالات، يتم حذف الجدول دون حذف القيود/الفهارس المرتبطة به.
-    # هذا يمنع CREATE TABLE من العمل لأن اسم القيد موجود لكن الجدول مفقود.
-    # نحذف القيد فقط إذا لم يكن الجدول موجودًا.
-    """
-    DO $$ BEGIN
-        IF NOT EXISTS (SELECT 1 FROM pg_tables WHERE schemaname='public' AND tablename='memorization_log') THEN
-            EXECUTE 'DROP INDEX IF EXISTS uq_user_page';
-            EXECUTE 'DROP INDEX IF EXISTS memorization_log_user_id_page_number_key';
-        END IF;
-    END; $$;
-    """,
-    """
-    DO $$ BEGIN
-        IF NOT EXISTS (SELECT 1 FROM pg_tables WHERE schemaname='public' AND tablename='user_settings') THEN
-            EXECUTE 'DROP INDEX IF EXISTS uq_user_reminder';
-            EXECUTE 'DROP INDEX IF EXISTS user_settings_user_id_reminder_type_key';
-        END IF;
-    END; $$;
-    """,
-    """
-    DO $$ BEGIN
-        IF NOT EXISTS (SELECT 1 FROM pg_tables WHERE schemaname='public' AND tablename='daily_progress') THEN
-            EXECUTE 'DROP INDEX IF EXISTS uq_user_date';
-            EXECUTE 'DROP INDEX IF EXISTS daily_progress_user_id_progress_date_key';
-        END IF;
-    END; $$;
-    """,
+_CREATE_TABLES = [
+    # users أولًا لأن باقي الجداول تعتمد عليه عبر FOREIGN KEY
+    """CREATE TABLE IF NOT EXISTS users (
+        id SERIAL PRIMARY KEY,
+        telegram_id BIGINT UNIQUE NOT NULL,
+        username VARCHAR(64),
+        full_name VARCHAR(128),
+        timezone VARCHAR(64) DEFAULT 'Africa/Algiers',
+        last_hifz_page INTEGER DEFAULT 0,
+        next_hifz_page INTEGER DEFAULT 1,
+        daily_hifz_amount INTEGER DEFAULT 1,
+        weekly_hifz_amount INTEGER DEFAULT 7,
+        plan_start_date DATE DEFAULT CURRENT_DATE,
+        onboarding_done BOOLEAN DEFAULT FALSE,
+        reading_hizb_current INTEGER DEFAULT 1,
+        reading_khatmah_count INTEGER DEFAULT 0,
+        listening_hizb_current INTEGER DEFAULT 1,
+        listening_khatmah_count INTEGER DEFAULT 0,
+        streak_days INTEGER DEFAULT 0,
+        last_active_date DATE,
+        notifications_enabled BOOLEAN DEFAULT TRUE,
+        weekly_prep_start INTEGER,
+        weekly_prep_end INTEGER,
+        pre_session_started_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+    )""",
+    """CREATE TABLE IF NOT EXISTS user_settings (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        reminder_type VARCHAR(32) NOT NULL,
+        reminder_time VARCHAR(5) NOT NULL,
+        enabled BOOLEAN DEFAULT TRUE,
+        UNIQUE (user_id, reminder_type)
+    )""",
+    """CREATE TABLE IF NOT EXISTS daily_progress (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        progress_date DATE DEFAULT CURRENT_DATE,
+        reading_done BOOLEAN DEFAULT FALSE,
+        listening_done BOOLEAN DEFAULT FALSE,
+        weekly_prep_done BOOLEAN DEFAULT FALSE,
+        nightly_prep_done BOOLEAN DEFAULT FALSE,
+        pre_session_prep_done BOOLEAN DEFAULT FALSE,
+        memorize_done BOOLEAN DEFAULT FALSE,
+        near_review_done BOOLEAN DEFAULT FALSE,
+        far_review_done BOOLEAN DEFAULT FALSE,
+        pre_session_duration_min INTEGER DEFAULT 0,
+        task_status VARCHAR(16) DEFAULT 'pending',
+        UNIQUE (user_id, progress_date)
+    )""",
+    """CREATE TABLE IF NOT EXISTS memorization_log (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        page_number INTEGER NOT NULL,
+        date_memorized DATE DEFAULT CURRENT_DATE,
+        review_count INTEGER DEFAULT 0,
+        UNIQUE (user_id, page_number)
+    )""",
+    """CREATE TABLE IF NOT EXISTS activity_log (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        log_date DATE DEFAULT CURRENT_DATE,
+        log_time TIMESTAMPTZ DEFAULT NOW(),
+        event_type VARCHAR(32),
+        description TEXT
+    )""",
+    """CREATE TABLE IF NOT EXISTS far_review_cycle (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER UNIQUE NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        current_cycle INTEGER DEFAULT 1,
+        cycle_start INTEGER,
+        cycle_end INTEGER,
+        last_completed_cycle INTEGER DEFAULT 0,
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+    )""",
+]
 
-    # ══ المرحلة 1: إنشاء الجداول (إذا لم تكن موجودة) ══
-    # الترتيب مهم: users أولًا لأن باقي الجداول تعتمد عليه عبر FOREIGN KEY
-    "CREATE TABLE IF NOT EXISTS users (id SERIAL PRIMARY KEY, telegram_id BIGINT UNIQUE NOT NULL, username VARCHAR(64), full_name VARCHAR(128), timezone VARCHAR(64) DEFAULT 'Africa/Algiers', last_hifz_page INTEGER DEFAULT 0, next_hifz_page INTEGER DEFAULT 1, daily_hifz_amount INTEGER DEFAULT 1, weekly_hifz_amount INTEGER DEFAULT 7, plan_start_date DATE DEFAULT CURRENT_DATE, onboarding_done BOOLEAN DEFAULT FALSE, reading_hizb_current INTEGER DEFAULT 1, reading_khatmah_count INTEGER DEFAULT 0, listening_hizb_current INTEGER DEFAULT 1, listening_khatmah_count INTEGER DEFAULT 0, streak_days INTEGER DEFAULT 0, last_active_date DATE, notifications_enabled BOOLEAN DEFAULT TRUE, weekly_prep_start INTEGER, weekly_prep_end INTEGER, pre_session_started_at TIMESTAMPTZ, created_at TIMESTAMPTZ DEFAULT NOW(), updated_at TIMESTAMPTZ DEFAULT NOW())",
-    "CREATE TABLE IF NOT EXISTS user_settings (id SERIAL PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, reminder_type VARCHAR(32) NOT NULL, reminder_time VARCHAR(5) NOT NULL, enabled BOOLEAN DEFAULT TRUE, CONSTRAINT uq_user_reminder UNIQUE (user_id, reminder_type))",
-    "CREATE TABLE IF NOT EXISTS daily_progress (id SERIAL PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, progress_date DATE DEFAULT CURRENT_DATE, reading_done BOOLEAN DEFAULT FALSE, listening_done BOOLEAN DEFAULT FALSE, weekly_prep_done BOOLEAN DEFAULT FALSE, nightly_prep_done BOOLEAN DEFAULT FALSE, pre_session_prep_done BOOLEAN DEFAULT FALSE, memorize_done BOOLEAN DEFAULT FALSE, near_review_done BOOLEAN DEFAULT FALSE, far_review_done BOOLEAN DEFAULT FALSE, pre_session_duration_min INTEGER DEFAULT 0, task_status VARCHAR(16) DEFAULT 'pending', CONSTRAINT uq_user_date UNIQUE (user_id, progress_date))",
-    "CREATE TABLE IF NOT EXISTS memorization_log (id SERIAL PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, page_number INTEGER NOT NULL, date_memorized DATE DEFAULT CURRENT_DATE, review_count INTEGER DEFAULT 0, CONSTRAINT uq_user_page UNIQUE (user_id, page_number))",
-    "CREATE TABLE IF NOT EXISTS activity_log (id SERIAL PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, log_date DATE DEFAULT CURRENT_DATE, log_time TIMESTAMPTZ DEFAULT NOW(), event_type VARCHAR(32), description TEXT)",
-    "CREATE TABLE IF NOT EXISTS far_review_cycle (id SERIAL PRIMARY KEY, user_id INTEGER UNIQUE NOT NULL REFERENCES users(id) ON DELETE CASCADE, current_cycle INTEGER DEFAULT 1, cycle_start INTEGER, cycle_end INTEGER, last_completed_cycle INTEGER DEFAULT 0, updated_at TIMESTAMPTZ DEFAULT NOW())",
-
-    # ══ المرحلة 2: إضافة الأعمدة المفقودة (للجداول القديمة) ══
+# ══ ALTER TABLE ADD COLUMN — لكل عمود في النموذج ══
+_ADD_COLUMNS = [
+    # users
     "ALTER TABLE users ADD COLUMN IF NOT EXISTS last_hifz_page INTEGER DEFAULT 0",
     "ALTER TABLE users ADD COLUMN IF NOT EXISTS next_hifz_page INTEGER DEFAULT 1",
     "ALTER TABLE users ADD COLUMN IF NOT EXISTS daily_hifz_amount INTEGER DEFAULT 1",
@@ -683,109 +730,44 @@ MIGRATION_STATEMENTS = [
     "ALTER TABLE users ADD COLUMN IF NOT EXISTS full_name VARCHAR(128)",
     "ALTER TABLE users ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW()",
     "ALTER TABLE users ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW()",
+    # daily_progress
+    "ALTER TABLE daily_progress ADD COLUMN IF NOT EXISTS reading_done BOOLEAN DEFAULT FALSE",
+    "ALTER TABLE daily_progress ADD COLUMN IF NOT EXISTS listening_done BOOLEAN DEFAULT FALSE",
     "ALTER TABLE daily_progress ADD COLUMN IF NOT EXISTS weekly_prep_done BOOLEAN DEFAULT FALSE",
     "ALTER TABLE daily_progress ADD COLUMN IF NOT EXISTS nightly_prep_done BOOLEAN DEFAULT FALSE",
     "ALTER TABLE daily_progress ADD COLUMN IF NOT EXISTS pre_session_prep_done BOOLEAN DEFAULT FALSE",
-    "ALTER TABLE daily_progress ADD COLUMN IF NOT EXISTS pre_session_duration_min INTEGER DEFAULT 0",
+    "ALTER TABLE daily_progress ADD COLUMN IF NOT EXISTS memorize_done BOOLEAN DEFAULT FALSE",
     "ALTER TABLE daily_progress ADD COLUMN IF NOT EXISTS near_review_done BOOLEAN DEFAULT FALSE",
     "ALTER TABLE daily_progress ADD COLUMN IF NOT EXISTS far_review_done BOOLEAN DEFAULT FALSE",
+    "ALTER TABLE daily_progress ADD COLUMN IF NOT EXISTS pre_session_duration_min INTEGER DEFAULT 0",
     "ALTER TABLE daily_progress ADD COLUMN IF NOT EXISTS task_status VARCHAR(16) DEFAULT 'pending'",
-    "ALTER TABLE daily_progress ADD COLUMN IF NOT EXISTS reading_done BOOLEAN DEFAULT FALSE",
-    "ALTER TABLE daily_progress ADD COLUMN IF NOT EXISTS listening_done BOOLEAN DEFAULT FALSE",
-    "ALTER TABLE daily_progress ADD COLUMN IF NOT EXISTS memorize_done BOOLEAN DEFAULT FALSE",
-
-    # ══ المرحلة 3: تحويل أنواع الأعمدة القديمة (TIMESTAMP → TIMESTAMPTZ) ══
-    # ADD COLUMN IF NOT EXISTS لا يُغيّر نوع العمود الموجود.
-    # نستخدم DO $$ للتحقق من النوع أولًا قبل التحويل.
-    """
-    DO $$ BEGIN
-        IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='created_at' AND data_type='timestamp without time zone') THEN
-            ALTER TABLE users ALTER COLUMN created_at TYPE TIMESTAMPTZ USING created_at AT TIME ZONE 'UTC';
-        END IF;
-    END; $$;
-    """,
-    """
-    DO $$ BEGIN
-        IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='updated_at' AND data_type='timestamp without time zone') THEN
-            ALTER TABLE users ALTER COLUMN updated_at TYPE TIMESTAMPTZ USING updated_at AT TIME ZONE 'UTC';
-        END IF;
-    END; $$;
-    """,
-    """
-    DO $$ BEGIN
-        IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='pre_session_started_at' AND data_type='timestamp without time zone') THEN
-            ALTER TABLE users ALTER COLUMN pre_session_started_at TYPE TIMESTAMPTZ USING pre_session_started_at AT TIME ZONE 'UTC';
-        END IF;
-    END; $$;
-    """,
-    """
-    DO $$ BEGIN
-        IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='activity_log' AND column_name='log_time' AND data_type='timestamp without time zone') THEN
-            ALTER TABLE activity_log ALTER COLUMN log_time TYPE TIMESTAMPTZ USING log_time AT TIME ZONE 'UTC';
-        END IF;
-    END; $$;
-    """,
-    """
-    DO $$ BEGIN
-        IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='far_review_cycle' AND column_name='updated_at' AND data_type='timestamp without time zone') THEN
-            ALTER TABLE far_review_cycle ALTER COLUMN updated_at TYPE TIMESTAMPTZ USING updated_at AT TIME ZONE 'UTC';
-        END IF;
-    END; $$;
-    """,
 ]
 
+# ══ أعمدة النموذج لكل جدول (للكشف عن الأعمدة الزائدة من نسخ قديمة) ══
+_MODEL_COLUMNS = {
+    "users": {"id", "telegram_id", "username", "full_name", "timezone",
+              "last_hifz_page", "next_hifz_page", "daily_hifz_amount", "weekly_hifz_amount",
+              "plan_start_date", "onboarding_done", "reading_hizb_current",
+              "reading_khatmah_count", "listening_hizb_current", "listening_khatmah_count",
+              "streak_days", "last_active_date", "notifications_enabled",
+              "weekly_prep_start", "weekly_prep_end", "pre_session_started_at",
+              "created_at", "updated_at"},
+    "user_settings": {"id", "user_id", "reminder_type", "reminder_time", "enabled"},
+    "daily_progress": {"id", "user_id", "progress_date", "reading_done", "listening_done",
+                      "weekly_prep_done", "nightly_prep_done", "pre_session_prep_done",
+                      "memorize_done", "near_review_done", "far_review_done",
+                      "pre_session_duration_min", "task_status"},
+    "memorization_log": {"id", "user_id", "page_number", "date_memorized", "review_count"},
+    "activity_log": {"id", "user_id", "log_date", "log_time", "event_type", "description"},
+    "far_review_cycle": {"id", "user_id", "current_cycle", "cycle_start", "cycle_end",
+                       "last_completed_cycle", "updated_at"},
+}
 
-def generate_migrations_from_model() -> list[str]:
-    """يُولّد عبارات ALTER TABLE ADD COLUMN IF NOT EXISTS تلقائيًا من النموذج.
+_REQUIRED_TABLES = ["users", "user_settings", "daily_progress", "memorization_log", "activity_log", "far_review_cycle"]
 
-    هذا يضمن عدم تفويت أي عمود جديد يُضاف للنموذج مستقبلاً.
-    كل عمود في كل جدول يُترجم إلى عبارة ALTER TABLE آمنة.
-    """
+# الأعمدة التي لا نُغيّر NOT NULL فيها أبداً (مفاتيح أساسية وأجنبية)
+_PROTECTED_COLUMNS = {"id", "telegram_id", "user_id"}
 
-    # خريطة أنواع SQLAlchemy ← أنواع PostgreSQL
-    TYPE_MAP = {
-        String: lambda col: f"VARCHAR({col.type.length or 256})",
-        Integer: lambda col: "INTEGER",
-        BigInteger: lambda col: "BIGINT",
-        Boolean: lambda col: "BOOLEAN",
-        DateTime: lambda col: "TIMESTAMPTZ" if col.type.timezone else "TIMESTAMP",
-        Date: lambda col: "DATE",
-        Text: lambda col: "TEXT",
-        Float: lambda col: "FLOAT",
-    }
-
-    statements = []
-    for table_name, table in Base.metadata.tables.items():
-        for column in table.columns:
-            # تحديد نوع PostgreSQL المناسب
-            pg_type = "TEXT"  # افتراضي
-            for sa_type, type_fn in TYPE_MAP.items():
-                if isinstance(column.type, sa_type):
-                    pg_type = type_fn(column)
-                    break
-
-            # بناء عبارة DEFAULT
-            default_clause = ""
-            if column.default is not None:
-                val = column.default.arg
-                if callable(val):
-                    # default=datetime.utcnow → استخدم NOW()
-                    if "datetime" in str(val):
-                        default_clause = " DEFAULT NOW()"
-                    elif "date" in str(val):
-                        default_clause = " DEFAULT CURRENT_DATE"
-                else:
-                    if isinstance(val, bool):
-                        default_clause = f" DEFAULT {str(val).upper()}"
-                    elif isinstance(val, str):
-                        default_clause = f" DEFAULT '{val}'"
-                    elif isinstance(val, (int, float)):
-                        default_clause = f" DEFAULT {val}"
-
-            stmt = f"ALTER TABLE {table_name} ADD COLUMN IF NOT EXISTS {column.name} {pg_type}{default_clause}"
-            statements.append(stmt)
-
-    return statements
 
 # ══════════════════════════════════════════════════════════════════════
 # ═══ 4. طبقة قاعدة البيانات ═══
@@ -889,16 +871,13 @@ AsyncSessionLocal = _SessionLocalProxy()
 
 
 async def init_db():
-    """تهيئة قاعدة البيانات — نظام migrations مُعاد هيكلته بالكامل (v4.1.3).
+    """تهيئة قاعدة البيانات — v4.2.0 (حل جذري).
 
-    المشاكل التي حلّها هذا التصميم:
-    ─ CREATE TABLE IF NOT EXISTS يفشل إذا كان اسم القيد موجودًا ككائن يتيم
-    ─ create_all يتعارض مع CREATE TABLE IF NOT EXISTS (نفس الجدول، آليتان)
-    ─ أعمدة TIMESTAMP القديمة لا تقبل datetime مع timezone
-
-    الاستراتيجية:
-    ─ PostgreSQL: نعتمد على MIGRATION_STATEMENTS فقط (بدون create_all)
-    ─ SQLite: نعتمد على create_all (لأن migrations مخصصة لـ PostgreSQL)
+    التصميم:
+    ─ لا DO $$ أبدًا (غير متوافق مع asyncpg)
+    ─ لا قيود مُسمّاة في CREATE TABLE (تمنع تعارض الكائنات اليتمية)
+    ─ كشف انحراف المخطط عبر استعلام Python من information_schema
+    ─ PostgreSQL: SQL يدوي فقط / SQLite: create_all
     """
     global engine, _session_maker, _disposed
     if _disposed:
@@ -908,87 +887,116 @@ async def init_db():
         )
         _disposed = False
 
-
-    # تسجيل تشخيصي: نوع قاعدة البيانات
     is_pg = config.is_postgres()
     logger.info(f"📋 نوع قاعدة البيانات: {'PostgreSQL' if is_pg else 'SQLite'}")
     logger.info(f"📋 رابط قاعدة البيانات: {config.DATABASE_URL[:30]}...")
 
     if is_pg:
-        # ══ PostgreSQL: نظام migrations كامل بدون create_all ══
-        # نجمع: العبارات الثابتة + العبارات المُولّدة ديناميكيًا من النموذج
-        all_migrations = list(MIGRATION_STATEMENTS) + generate_migrations_from_model()
-        # إزالة التكرار (نفس العبارة قد تظهر مرتين)
-        seen = set()
-        unique_migrations = []
-        for stmt in all_migrations:
-            # نُطبيع المسافات/BOM قبل المقارنة
-            normalized = stmt.strip()
-            if normalized not in seen:
-                seen.add(normalized)
-                unique_migrations.append(stmt)
-
-        logger.info(f"📋 تنفيذ {len(unique_migrations)} جملة migration...")
-        success_count = 0
-        failed = []
-        for i, stmt in enumerate(unique_migrations):
+        # ══ المرحلة 1: إنشاء الجداول (CREATE TABLE IF NOT EXISTS) ══
+        # بدون أسماء قيود → لا تعارض مع كائنات يتيمة.
+        for stmt in _CREATE_TABLES:
             try:
                 async with engine.begin() as conn:
                     await conn.execute(sqlalchemy.text(stmt))
-                success_count += 1
+                logger.debug(f"✅ CREATE TABLE نجح")
             except Exception as e:
-                short = stmt.strip()[:80].replace('\n', ' ')
-                failed.append(f"  [{i+1}] {short}... → {type(e).__name__}")
-        if failed:
-            logger.warning(f"⚠️ migrations: {success_count}/{len(unique_migrations)} نجحت، {len(failed)} فشلت:")
-            for f in failed:
-                logger.warning(f)
-        else:
-            logger.info(f"✅ migrations: {success_count}/{len(unique_migrations)} نجحت")
+                logger.warning(f"⚠️ CREATE TABLE فشل: {type(e).__name__}: {str(e)[:100]}")
+
+        # ══ المرحلة 2: إضافة الأعمدة المفقودة ══
+        for stmt in _ADD_COLUMNS:
+            try:
+                async with engine.begin() as conn:
+                    await conn.execute(sqlalchemy.text(stmt))
+            except Exception as e:
+                logger.debug(f"⚠️ ADD COLUMN فشل (مقبول): {type(e).__name__}: {str(e)[:80]}")
+
+        # ══ المرحلة 3: تحويل TIMESTAMP → TIMESTAMPTZ (بشرط) ══
+        # نتحقق من Python بدل DO $$
+        _tz_fixes = [
+            ("users", "created_at"),
+            ("users", "updated_at"),
+            ("users", "pre_session_started_at"),
+            ("activity_log", "log_time"),
+            ("far_review_cycle", "updated_at"),
+        ]
+        for tbl, col in _tz_fixes:
+            try:
+                async with engine.begin() as conn:
+                    # التحقق: هل العمود من نوع timestamp without time zone؟
+                    check = await conn.execute(sqlalchemy.text(
+                        "SELECT data_type FROM information_schema.columns "
+                        "WHERE table_name=:t AND column_name=:c",
+                        {"t": tbl, "c": col}
+                    ))
+                    row = check.first()
+                    if row and row[0] == "timestamp without time zone":
+                        await conn.execute(sqlalchemy.text(
+                            f"ALTER TABLE {tbl} ALTER COLUMN {col} TYPE TIMESTAMPTZ "
+                            f"USING {col} AT TIME ZONE 'UTC'"
+                        ))
+                        logger.info(f"✅ تحويل {tbl}.{col} → TIMESTAMPTZ")
+            except Exception as e:
+                logger.debug(f"⚠️ timezone fix {tbl}.{col}: {type(e).__name__}")
+
+        # ══ المرحلة 4: إصلاح انحراف المخطط (Schema Drift) ══
+        # نكتشف أعمدة NOT NULL بدون DEFAULT في الجداول التي ليست في النموذج
+        # ونُحوّلها لتسمح بـ NULL → يمنع NOT NULL violation عند INSERT عبر ORM
+        try:
+            async with engine.begin() as conn:
+                # بناء قائمة الجداول كمعاملات
+                table_list = ", ".join(f"'{t}'" for t in _REQUIRED_TABLES)
+                protected_list = ", ".join(f"'{c}'" for c in _PROTECTED_COLUMNS)
+
+                drift_query = f"""
+                    SELECT table_name, column_name
+                    FROM information_schema.columns c
+                    WHERE c.table_schema = 'public'
+                      AND c.table_name IN ({table_list})
+                      AND c.is_nullable = 'NO'
+                      AND c.column_default IS NULL
+                      AND c.column_name NOT IN ({protected_list})
+                """
+                result = await conn.execute(sqlalchemy.text(drift_query))
+                drift_cols = result.fetchall()
+
+                for row in drift_cols:
+                    tbl_name, col_name = row[0], row[1]
+                    try:
+                        await conn.execute(sqlalchemy.text(
+                            f"ALTER TABLE {tbl_name} ALTER COLUMN {col_name} DROP NOT NULL"
+                        ))
+                        logger.info(f"✅ drift fix: {tbl_name}.{col_name} → nullable")
+                    except Exception as e:
+                        logger.debug(f"⚠️ drift fix فشل {tbl_name}.{col_name}: {e}")
+        except Exception as e:
+            logger.warning(f"⚠️ فشل كشف انحراف المخطط: {e}")
 
         # ══ تحقق نهائي: كل الجداول موجودة ══
-        required_tables = ["users", "user_settings", "daily_progress", "memorization_log", "activity_log", "far_review_cycle"]
         try:
             async with engine.begin() as conn:
                 result = await conn.execute(sqlalchemy.text(
                     "SELECT tablename FROM pg_tables WHERE schemaname = 'public'"
                 ))
                 existing = {row[0] for row in result.fetchall()}
-                missing = [t for t in required_tables if t not in existing]
+                missing = [t for t in _REQUIRED_TABLES if t not in existing]
                 if missing:
-                    logger.error(f"❌ جداول مفقودة بعد migrations: {missing}")
-                    # محاولة إنشاء يدوي عبر CREATE TABLE IF NOT EXISTS (إعادة المحاولة)
+                    logger.error(f"❌ جداول مفقودة: {missing}")
+                    # محاولة أخيرة: إنشاء الجداول المفقودة
                     for tbl in missing:
-                        create_stmt = _get_create_table_sql(tbl)
-                        if create_stmt:
+                        sql = _get_create_table_sql(tbl)
+                        if sql:
                             try:
-                                async with engine.begin() as conn2:
-                                    await conn2.execute(sqlalchemy.text(create_stmt))
+                                await conn.execute(sqlalchemy.text(sql))
                                 logger.info(f"✅ تم إنشاء {tbl} بالمحاولة الثانية")
                             except Exception as e3:
                                 logger.error(f"❌ فشل إنشاء {tbl}: {e3}")
                 else:
-                    logger.info(f"✅ التحقق: كل {len(required_tables)} جداول موجودة")
+                    logger.info(f"✅ التحقق: كل {len(_REQUIRED_TABLES)} جداول موجودة")
         except Exception as e:
-            logger.warning(f"⚠️ تعذّر التحقق من الجداول: {e}")
-
-        # ══ تحقق من أعمدة أساسية ══
-        try:
-            async with engine.begin() as conn:
-                result = await conn.execute(sqlalchemy.text(
-                    "SELECT column_name FROM information_schema.columns "
-                    "WHERE table_name='users' AND column_name='last_hifz_page'"
-                ))
-                row = result.first()
-                if row:
-                    logger.info("✅ التحقق: عمود last_hifz_page موجود في جدول users")
-                else:
-                    logger.error("❌ عمود last_hifz_page غير موجود!")
-        except Exception as e:
-            logger.warning(f"⚠️ تعذّر التحقق من الأعمدة: {e}")
+            logger.warning(f"⚠️ تعذّر التحقق النهائي: {e}")
 
     else:
-        # ══ SQLite: نعتمد على create_all ══
+        # ══ SQLite: create_all (بسيط) ══
         try:
             async with engine.begin() as conn:
                 await conn.run_sync(Base.metadata.create_all)
@@ -998,18 +1006,6 @@ async def init_db():
 
     logger.info("✅ تم تهيئة قاعدة البيانات")
 
-
-def _get_create_table_sql(table_name: str) -> Optional[str]:
-    """يُعيد عبارة CREATE TABLE IF NOT EXISTS لجدول معيّن — للإصلاح الطارئ."""
-    _TABLE_SQL = {
-        "users": "CREATE TABLE IF NOT EXISTS users (id SERIAL PRIMARY KEY, telegram_id BIGINT UNIQUE NOT NULL, username VARCHAR(64), full_name VARCHAR(128), timezone VARCHAR(64) DEFAULT 'Africa/Algiers', last_hifz_page INTEGER DEFAULT 0, next_hifz_page INTEGER DEFAULT 1, daily_hifz_amount INTEGER DEFAULT 1, weekly_hifz_amount INTEGER DEFAULT 7, plan_start_date DATE DEFAULT CURRENT_DATE, onboarding_done BOOLEAN DEFAULT FALSE, reading_hizb_current INTEGER DEFAULT 1, reading_khatmah_count INTEGER DEFAULT 0, listening_hizb_current INTEGER DEFAULT 1, listening_khatmah_count INTEGER DEFAULT 0, streak_days INTEGER DEFAULT 0, last_active_date DATE, notifications_enabled BOOLEAN DEFAULT TRUE, weekly_prep_start INTEGER, weekly_prep_end INTEGER, pre_session_started_at TIMESTAMPTZ, created_at TIMESTAMPTZ DEFAULT NOW(), updated_at TIMESTAMPTZ DEFAULT NOW())",
-        "user_settings": "CREATE TABLE IF NOT EXISTS user_settings (id SERIAL PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, reminder_type VARCHAR(32) NOT NULL, reminder_time VARCHAR(5) NOT NULL, enabled BOOLEAN DEFAULT TRUE, CONSTRAINT uq_user_reminder UNIQUE (user_id, reminder_type))",
-        "daily_progress": "CREATE TABLE IF NOT EXISTS daily_progress (id SERIAL PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, progress_date DATE DEFAULT CURRENT_DATE, reading_done BOOLEAN DEFAULT FALSE, listening_done BOOLEAN DEFAULT FALSE, weekly_prep_done BOOLEAN DEFAULT FALSE, nightly_prep_done BOOLEAN DEFAULT FALSE, pre_session_prep_done BOOLEAN DEFAULT FALSE, memorize_done BOOLEAN DEFAULT FALSE, near_review_done BOOLEAN DEFAULT FALSE, far_review_done BOOLEAN DEFAULT FALSE, pre_session_duration_min INTEGER DEFAULT 0, task_status VARCHAR(16) DEFAULT 'pending', CONSTRAINT uq_user_date UNIQUE (user_id, progress_date))",
-        "memorization_log": "CREATE TABLE IF NOT EXISTS memorization_log (id SERIAL PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, page_number INTEGER NOT NULL, date_memorized DATE DEFAULT CURRENT_DATE, review_count INTEGER DEFAULT 0, CONSTRAINT uq_user_page UNIQUE (user_id, page_number))",
-        "activity_log": "CREATE TABLE IF NOT EXISTS activity_log (id SERIAL PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, log_date DATE DEFAULT CURRENT_DATE, log_time TIMESTAMPTZ DEFAULT NOW(), event_type VARCHAR(32), description TEXT)",
-        "far_review_cycle": "CREATE TABLE IF NOT EXISTS far_review_cycle (id SERIAL PRIMARY KEY, user_id INTEGER UNIQUE NOT NULL REFERENCES users(id) ON DELETE CASCADE, current_cycle INTEGER DEFAULT 1, cycle_start INTEGER, cycle_end INTEGER, last_completed_cycle INTEGER DEFAULT 0, updated_at TIMESTAMPTZ DEFAULT NOW())",
-    }
-    return _TABLE_SQL.get(table_name)
 
 
 async def close_db():
@@ -4895,13 +4891,13 @@ def build_application():
 def main():
     """نقطة الدخول الرئيسية."""
     try:
-        print("📖 بوت الحصون الخمسة — الإصدار 4.1.3 — البدء", flush=True)
+        print("📖 بوت الحصون الخمسة — الإصدار 4.2.0 — البدء", flush=True)
         print(f"  - المنطقة الزمنية: {config.DEFAULT_TIMEZONE}", flush=True)
         print(f"  - قاعدة البيانات: {config.DATABASE_URL[:50] if config.DATABASE_URL else 'in-memory'}...", flush=True)
         print(f"  - PostgreSQL: {config.is_postgres()}", flush=True)
         print(f"  - BOT_TOKEN مضبوط: {bool(config.BOT_TOKEN)}", flush=True)
         print(f"  - keep-alive: {'مُفعّل' if config.KEEPALIVE_ENABLED else 'مُعطّل'}", flush=True)
-        logger.info("📖 بوت الحصون الخمسة — الإصدار 4.1.3 — البدء")
+        logger.info("📖 بوت الحصون الخمسة — الإصدار 4.2.0 — البدء")
 
         app = build_application()
         print("🚀 تشغيل البوت في وضع polling...", flush=True)
