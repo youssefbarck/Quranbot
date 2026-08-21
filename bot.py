@@ -1,7 +1,7 @@
 """
 ╔══════════════════════════════════════════════════════════════════╗
-║                    بوت الحصون الخمسة — الإصدار 4.1.1                    ║
-║                  Quran Fortresses Bot — Single File Edition                ║
+║                    بوت الحصون الخمسة — الإصدار 4.1.3                    ║
+║                  Quran Fortresses Bot — v4.1.3 (full schema fix)                ║
 ╠══════════════════════════════════════════════════════════════════╣
 ║  مرافقك الشخصي لحفظ القرآن الكريم وفق منهج الحصون الخمسة.               ║
 ║                                                                    ║
@@ -77,13 +77,14 @@ from telegram.error import (
     NetworkError,
     TimedOut,
 )
+from telegram.ext import ContextTypes
 from telegram.ext import (
     Application,
     ApplicationBuilder,
-    CallbackQueryHandler,
     CommandHandler,
-    ContextTypes,
+    CallbackQueryHandler,
     MessageHandler,
+    ContextTypes,
     filters,
 )
 
@@ -118,7 +119,6 @@ KEEPALIVE_INTERVAL = int(os.getenv("KEEPALIVE_INTERVAL", "280"))
 # (لا تُغيّر هذه القيم دون فهم تأثيرها على دورات الحفظ والمراجعة)
 
 QURAN_PAGE_COUNT = 604          # عدد أوجه المصحف
-PAGES_PER_HIZB = 10              # عدد أوجه كل حزب (ثابت دائمًا)
 QURAN_HIZB_COUNT = 60          # عدد الأحزاب (كل حزب = 10 أوجه)
 QURAN_JUZ_COUNT = 30           # عدد الأجزاء (كل جزء = 20 وجهًا)
 
@@ -400,19 +400,10 @@ def page_to_surah(page: int) -> SurahInfo | None:
 
 
 def get_surah_by_name(name: str) -> SurahInfo | None:
-    """بحث بالاسم العربي — مطابقة كاملة أولًا، ثم بداية الكلمة."""
+    """بحث بالاسم العربي (مطابق جزئي)"""
     name = name.strip()
-    # 1. مطابقة كاملة
     for s in SURAHS:
-        if s.name_ar == name:
-            return s
-    # 2. الاسم مُدخل يبدأ باسم السورة (مثل: "المائدة" ← "المائدة")
-    for s in SURAHS:
-        if s.name_ar.startswith(name) and len(name) >= 3:
-            return s
-    # 3. اسم السورة يبدأ بالإدخال
-    for s in SURAHS:
-        if s.name_ar.startswith(name):
+        if s.name_ar == name or name in s.name_ar or s.name_ar in name:
             return s
     return None
 
@@ -428,7 +419,6 @@ def get_surah_by_number(num: int) -> SurahInfo | None:
 RECITERS = {
     "الحصري": "https://server8.mp3quran.net/afs/",
     "العجمي": "https://server7.mp3quran.net/afs/",
-    # ملاحظة: الحصري والعجمي يشيران لنفس المسار حاليًا — راجع الروابط عند التخصيص
     "المعيقلي": "https://server11.mp3quran.net/maher/",
     "عبد الباسط": "https://server7.mp3quran.net/basit/",
     "السديس": "https://server13.mp3quran.net/sds/",
@@ -526,11 +516,11 @@ class User(Base):
     weekly_prep_end: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
     # ====== التحضير القبلي ======
-    pre_session_started_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    pre_session_started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
     # ====== الطوابع الزمنية ======
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
     # العلاقات
     settings_rel: Mapped[list["UserSettings"]] = relationship(back_populates="user", cascade="all, delete-orphan")
@@ -599,7 +589,7 @@ class ActivityLog(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
     log_date: Mapped[date] = mapped_column(Date, default=date.today, index=True)
-    log_time: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
+    log_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     event_type: Mapped[str] = mapped_column(String(32))  # memorize / reading_done / setting_change / ...
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
@@ -619,7 +609,7 @@ class FarReviewCycle(Base):
     cycle_start: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     cycle_end: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     last_completed_cycle: Mapped[int] = mapped_column(Integer, default=0)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
     user: Mapped["User"] = relationship(back_populates="far_review_state")
 
@@ -642,12 +632,12 @@ MIGRATION_STATEMENTS = [
     "ALTER TABLE users ADD COLUMN IF NOT EXISTS notifications_enabled BOOLEAN DEFAULT TRUE",
     "ALTER TABLE users ADD COLUMN IF NOT EXISTS weekly_prep_start INTEGER",
     "ALTER TABLE users ADD COLUMN IF NOT EXISTS weekly_prep_end INTEGER",
-    "ALTER TABLE users ADD COLUMN IF NOT EXISTS pre_session_started_at TIMESTAMP",
+    "ALTER TABLE users ADD COLUMN IF NOT EXISTS pre_session_started_at TIMESTAMPTZ",
     "ALTER TABLE users ADD COLUMN IF NOT EXISTS timezone VARCHAR(64) DEFAULT 'Africa/Algiers'",
     "ALTER TABLE users ADD COLUMN IF NOT EXISTS username VARCHAR(64)",
     "ALTER TABLE users ADD COLUMN IF NOT EXISTS full_name VARCHAR(128)",
-    "ALTER TABLE users ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT NOW()",
-    "ALTER TABLE users ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW()",
+    "ALTER TABLE users ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW()",
+    "ALTER TABLE users ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW()",
     # daily_progress
     "ALTER TABLE daily_progress ADD COLUMN IF NOT EXISTS weekly_prep_done BOOLEAN DEFAULT FALSE",
     "ALTER TABLE daily_progress ADD COLUMN IF NOT EXISTS nightly_prep_done BOOLEAN DEFAULT FALSE",
@@ -659,10 +649,55 @@ MIGRATION_STATEMENTS = [
     "ALTER TABLE daily_progress ADD COLUMN IF NOT EXISTS reading_done BOOLEAN DEFAULT FALSE",
     "ALTER TABLE daily_progress ADD COLUMN IF NOT EXISTS listening_done BOOLEAN DEFAULT FALSE",
     "ALTER TABLE daily_progress ADD COLUMN IF NOT EXISTS memorize_done BOOLEAN DEFAULT FALSE",
-    # activity_log (جدول قد يكون مفقودًا)
-    "CREATE TABLE IF NOT EXISTS activity_log (id SERIAL PRIMARY KEY, user_id INTEGER NOT NULL, log_date DATE DEFAULT CURRENT_DATE, log_time TIMESTAMP DEFAULT NOW(), event_type VARCHAR(32), description TEXT)",
-    # far_review_cycle (جدول قد يكون مفقودًا)
-    "CREATE TABLE IF NOT EXISTS far_review_cycle (id SERIAL PRIMARY KEY, user_id INTEGER UNIQUE NOT NULL, current_cycle INTEGER DEFAULT 1, cycle_start INTEGER, cycle_end INTEGER, last_completed_cycle INTEGER DEFAULT 0, updated_at TIMESTAMP DEFAULT NOW())",
+    # user_settings (جدول قد يكون مفقودًا — لم يُنشأ بسبب فشل create_all)
+    "CREATE TABLE IF NOT EXISTS user_settings (id SERIAL PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, reminder_type VARCHAR(32) NOT NULL, reminder_time VARCHAR(5) NOT NULL, enabled BOOLEAN DEFAULT TRUE, CONSTRAINT uq_user_reminder UNIQUE (user_id, reminder_type))",
+    # daily_progress (جدول قد يكون مفقودًا)
+    "CREATE TABLE IF NOT EXISTS daily_progress (id SERIAL PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, progress_date DATE DEFAULT CURRENT_DATE, reading_done BOOLEAN DEFAULT FALSE, listening_done BOOLEAN DEFAULT FALSE, weekly_prep_done BOOLEAN DEFAULT FALSE, nightly_prep_done BOOLEAN DEFAULT FALSE, pre_session_prep_done BOOLEAN DEFAULT FALSE, memorize_done BOOLEAN DEFAULT FALSE, near_review_done BOOLEAN DEFAULT FALSE, far_review_done BOOLEAN DEFAULT FALSE, pre_session_duration_min INTEGER DEFAULT 0, task_status VARCHAR(16) DEFAULT 'pending', CONSTRAINT uq_user_date UNIQUE (user_id, progress_date))",
+    # memorization_log (جدول قد يكون مفقودًا)
+    "CREATE TABLE IF NOT EXISTS memorization_log (id SERIAL PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, page_number INTEGER NOT NULL, date_memorized DATE DEFAULT CURRENT_DATE, review_count INTEGER DEFAULT 0, CONSTRAINT uq_user_page UNIQUE (user_id, page_number))",
+    # activity_log (جدول قد يكون مفقودًا — TIMESTAMPTZ للتوافق مع timezone)
+    "CREATE TABLE IF NOT EXISTS activity_log (id SERIAL PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, log_date DATE DEFAULT CURRENT_DATE, log_time TIMESTAMPTZ DEFAULT NOW(), event_type VARCHAR(32), description TEXT)",
+    # far_review_cycle (جدول قد يكون مفقودًا — TIMESTAMPTZ للتوافق مع timezone)
+    "CREATE TABLE IF NOT EXISTS far_review_cycle (id SERIAL PRIMARY KEY, user_id INTEGER UNIQUE NOT NULL REFERENCES users(id) ON DELETE CASCADE, current_cycle INTEGER DEFAULT 1, cycle_start INTEGER, cycle_end INTEGER, last_completed_cycle INTEGER DEFAULT 0, updated_at TIMESTAMPTZ DEFAULT NOW())",
+    # ── v4.1.3: تحويل أعمدة TIMESTAMP الموجودة إلى TIMESTAMPTZ ──
+    # هذا ضروري لأن الأعمدة أُنشئت كـ TIMESTAMP WITHOUT TIME ZONE في v4.1.1
+    # و ADD COLUMN IF NOT EXISTS لا يُغيّر نوع العمود الموجود.
+    # نستخدم DO $$ لتنفيذها بشروط آمنة (يتحقق من نوع العمود أولًا).
+    """
+    DO $$ BEGIN
+        IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='created_at' AND data_type='timestamp without time zone') THEN
+            ALTER TABLE users ALTER COLUMN created_at TYPE TIMESTAMPTZ USING created_at AT TIME ZONE 'UTC';
+        END IF;
+    END; $$;
+    """,
+    """
+    DO $$ BEGIN
+        IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='updated_at' AND data_type='timestamp without time zone') THEN
+            ALTER TABLE users ALTER COLUMN updated_at TYPE TIMESTAMPTZ USING updated_at AT TIME ZONE 'UTC';
+        END IF;
+    END; $$;
+    """,
+    """
+    DO $$ BEGIN
+        IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='pre_session_started_at' AND data_type='timestamp without time zone') THEN
+            ALTER TABLE users ALTER COLUMN pre_session_started_at TYPE TIMESTAMPTZ USING pre_session_started_at AT TIME ZONE 'UTC';
+        END IF;
+    END; $$;
+    """,
+    """
+    DO $$ BEGIN
+        IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='activity_log' AND column_name='log_time' AND data_type='timestamp without time zone') THEN
+            ALTER TABLE activity_log ALTER COLUMN log_time TYPE TIMESTAMPTZ USING log_time AT TIME ZONE 'UTC';
+        END IF;
+    END; $$;
+    """,
+    """
+    DO $$ BEGIN
+        IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='far_review_cycle' AND column_name='updated_at' AND data_type='timestamp without time zone') THEN
+            ALTER TABLE far_review_cycle ALTER COLUMN updated_at TYPE TIMESTAMPTZ USING updated_at AT TIME ZONE 'UTC';
+        END IF;
+    END; $$;
+    """,
 ]
 
 
@@ -679,7 +714,7 @@ def generate_migrations_from_model() -> list[str]:
         Integer: lambda col: "INTEGER",
         BigInteger: lambda col: "BIGINT",
         Boolean: lambda col: "BOOLEAN",
-        DateTime: lambda col: "TIMESTAMP",
+        DateTime: lambda col: "TIMESTAMPTZ" if col.type.timezone else "TIMESTAMP",
         Date: lambda col: "DATE",
         Text: lambda col: "TEXT",
         Float: lambda col: "FLOAT",
@@ -842,8 +877,7 @@ async def init_db():
     # تسجيل تشخيصي: نوع قاعدة البيانات
     is_pg = config.is_postgres()
     logger.info(f"📋 نوع قاعدة البيانات: {'PostgreSQL' if is_pg else 'SQLite'}")
-    _db_preview = "(مضبوط)" if config.DATABASE_URL else "(in-memory)"
-    logger.info(f"📋 قاعدة البيانات: {_db_preview}")
+    logger.info(f"📋 رابط قاعدة البيانات: {config.DATABASE_URL[:30]}...")
 
     # ── المعاملة 1: migrations ──
     # نجمع: العبارات الثابتة + العبارات المُولّدة ديناميكيًا من النموذج
@@ -869,14 +903,21 @@ async def init_db():
                 logger.debug(f"migration skip: {stmt[:60]}... → {e}")
         logger.info(f"✅ migrations: {success_count}/{len(unique_migrations)} نجحت")
 
-    # ── المعاملة 2: create_all ──
-    # ينشئ الجداول الجديدة فقط (checkfirst=True). في معاملة منفصلة تمامًا.
-    try:
-        async with engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
-        logger.info("✅ create_all اكتمل")
-    except Exception as e:
-        logger.warning(f"⚠️ create_all تخطّى بعض العناصر: {e}")
+    # ── المعاملة 2: create_all (جدول بجدول) ──
+    # إنشاء كل جدول على حدة لتجنب فشل الكل عند خطأ واحد.
+    # هذا يضمن أن جدول user_settings يُنشأ حتى لو فشل memorization_log.
+    tables = Base.metadata.sorted_tables
+    logger.info(f"📋 create_all: {len(tables)} جدول للإنشاء...")
+    created_count = 0
+    for table in tables:
+        try:
+            async with engine.begin() as conn:
+                await conn.run_sync(Base.metadata.create_all, tables=[table])
+            created_count += 1
+            logger.debug(f"  ✅ جدول {table.name}")
+        except Exception as e:
+            logger.debug(f"  ⚠️ جدول {table.name} تخطّي: {e}")
+    logger.info(f"✅ create_all: {created_count}/{len(tables)} جدول")
 
     # ── التحقق: هل الأعمدة موجودة فعلاً؟ ──
     if is_pg:
@@ -894,6 +935,34 @@ async def init_db():
         except Exception as e:
             logger.warning(f"⚠️ تعذّر التحقق من الأعمدة: {e}")
 
+    # ── التحقق النهائي: كل الجداول موجودة ──
+    if is_pg:
+        required_tables = ["users", "user_settings", "daily_progress", "memorization_log", "activity_log", "far_review_cycle"]
+        try:
+            async with engine.begin() as conn:
+                result = await conn.execute(sqlalchemy.text(
+                    "SELECT tablename FROM pg_tables WHERE schemaname = 'public'"
+                ))
+                existing = {row[0] for row in result.fetchall()}
+                missing = [t for t in required_tables if t not in existing]
+                if missing:
+                    logger.error(f"❌ جداول مفقودة: {missing}")
+                    # محاولة إنشاء الجداول المفقودة عبر create_all لكل جدول
+                    for table_name in missing:
+                        for table in Base.metadata.sorted_tables:
+                            if table.name == table_name:
+                                try:
+                                    async with engine.begin() as conn2:
+                                        await conn2.run_sync(Base.metadata.create_all, tables=[table])
+                                    logger.info(f"✅ تم إنشاء الجدول المفقود: {table_name}")
+                                except Exception as e2:
+                                    logger.error(f"❌ فشل إنشاء {table_name}: {e2}")
+                                break
+                else:
+                    logger.info(f"✅ التحقق: كل {len(required_tables)} جداول موجودة")
+        except Exception as e:
+            logger.warning(f"⚠️ تعذّر التحقق من الجداول: {e}")
+
     logger.info("✅ تم تهيئة قاعدة البيانات")
 
 
@@ -906,25 +975,27 @@ async def close_db():
 
 async def ensure_default_reminders(user_id: int):
     """تأكد من وجود 8 تذكيرات افتراضية لكل مستخدم."""
+    try:
+        async with AsyncSessionLocal() as session:
+            # هل توجد تذكيرات أصلاً؟
+            result = await session.execute(
+                select(UserSettings).where(UserSettings.user_id == user_id)
+            )
+            existing = result.scalars().all()
+            if existing:
+                return  # تذكيرات موجودة بالفعل
 
-    async with AsyncSessionLocal() as session:
-        # هل توجد تذكيرات أصلاً؟
-        result = await session.execute(
-            select(UserSettings).where(UserSettings.user_id == user_id)
-        )
-        existing = result.scalars().all()
-        if existing:
-            return  # تذكيرات موجودة بالفعل
-
-        # إنشاء التذكيرات الافتراضية
-        for reminder_type, default_time in cfg.DEFAULT_REMINDER_TIMES.items():
-            session.add(UserSettings(
-                user_id=user_id,
-                reminder_type=reminder_type,
-                reminder_time=default_time,
-                enabled=True,
-            ))
-        await session.commit()
+            # إنشاء التذكيرات الافتراضية
+            for reminder_type, default_time in cfg.DEFAULT_REMINDER_TIMES.items():
+                session.add(UserSettings(
+                    user_id=user_id,
+                    reminder_type=reminder_type,
+                    reminder_time=default_time,
+                    enabled=True,
+                ))
+            await session.commit()
+    except Exception as e:
+        logger.warning(f"⚠️ تعذّر إنشاء التذكيرات الافتراضية للمستخدم {user_id}: {e}")
 
 # ══════════════════════════════════════════════════════════════════════
 # ═══ 5. محرك الحفظ (الحصن الثالث) ═══
@@ -1048,7 +1119,7 @@ def hizb_to_pages(hizb: int) -> tuple[int, int]:
     """حوّل رقم الحزب (1-60) إلى نطاق الأوجه (10 أوجه لكل حزب)."""
     hizb = max(1, min(hizb, config.QURAN_HIZB_COUNT))
     start = (hizb - 1) * config.DAILY_LISTENING_PAGES + 1
-    end = start + PAGES_PER_HIZB - 1
+    end = start + config.DAILY_LISTENING_PAGES - 1
     return start, end
 
 
@@ -1947,16 +2018,11 @@ async def generate_suggestions(session: AsyncSession, user: User) -> list[str]:
 معالجات مساعدة مشتركة بين المعالجات الأخرى.
 """
 
+logger = logging.getLogger(__name__)
 
 
 async def safe_edit_message(query, text, reply_markup=None) -> bool:
-    """تحرير رسالة inline بسلامة — يتجاهل 'الرسالة لم تتغيّر'.
-
-    يقطع النص تلقائيًا إذا تجاوز 4096 حرف (حد تيليجرام).
-    """
-    # قطع النص إذا تجاوز الحد
-    if len(text) > 4000:
-        text = text[:3900] + "\n\n⏳ ... (الرسالة طويلة جدًا — بعض التفاصيل لم تُعرض)"
+    """تحرير رسالة inline بسلامة — يتجاهل 'الرسالة لم تتغيّر'."""
     try:
         await query.edit_message_text(
             text, parse_mode=ParseMode.HTML,
@@ -1978,9 +2044,7 @@ async def safe_edit_message(query, text, reply_markup=None) -> bool:
 
 
 async def safe_send_message(bot, chat_id, text, reply_markup=None) -> bool:
-    """إرسال آمن — يقطع النص إذا تجاوز 4096 حرف."""
-    if len(text) > 4000:
-        text = text[:3900] + "\n\n⏳ ... (الرسالة طويلة جدًا)"
+    """إرسال آمن."""
     try:
         await bot.send_message(
             chat_id=chat_id, text=text,
@@ -2016,55 +2080,6 @@ def main_keyboard() -> ReplyKeyboardMarkup:
         is_persistent=True,
         input_field_placeholder="اضغط أحد الأزرار بالأسفل ✨",
     )
-
-
-
-async def _handle_onboarding_text(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: int, state: str, text: str):
-    """معالجة الإدخال النصي لخطوات Onboarding 1-4."""
-    if state == "ob_step_1_memorization":
-        await process_onboarding_memorization(update, context, text)
-        return
-
-    if state == "ob_step_2_daily_amount_custom":
-        try:
-            amount = int(text.strip())
-            if not (1 <= amount <= 10):
-                raise ValueError
-        except (ValueError, TypeError):
-            await update.message.reply_text("❌ أدخلي رقمًا بين 1 و 10:", parse_mode=ParseMode.HTML)
-            return
-        async with AsyncSessionLocal() as session:
-            user = await get_or_create_user(session, telegram_id=user_id)
-            await update_settings(session, user, daily_amount=amount)
-        await ask_weekly_amount(update, context)
-        return
-
-    if state == "ob_step_3_weekly_amount_custom":
-        try:
-            amount = int(text.strip())
-            if not (1 <= amount <= 30):
-                raise ValueError
-        except (ValueError, TypeError):
-            await update.message.reply_text("❌ أدخلي رقمًا بين 1 و 30:", parse_mode=ParseMode.HTML)
-            return
-        async with AsyncSessionLocal() as session:
-            user = await get_or_create_user(session, telegram_id=user_id)
-            await update_settings(session, user, weekly_amount=amount)
-        await ask_plan_start_date(update, context)
-        return
-
-    if state == "ob_step_4_plan_start_manual":
-        try:
-            start_date = datetime.strptime(text.strip(), "%Y-%m-%d").date()
-        except (ValueError, TypeError):
-            await update.message.reply_text(
-                "❌ صيغة غير صحيحة. استخدمي <code>YYYY-MM-DD</code>:", parse_mode=ParseMode.HTML)
-            return
-        async with AsyncSessionLocal() as session:
-            user = await get_or_create_user(session, telegram_id=user_id)
-            await update_settings(session, user, plan_start_date=start_date)
-        await ask_reminder_times(update, context)
-        return
 
 
 # خريطة نصوص الـ ReplyKeyboard ← أوامر داخلية
@@ -2949,6 +2964,7 @@ def render_help() -> str:
 
 
 
+logger = logging.getLogger(__name__)
 
 # حالة الـ onboarding لكل مستخدم (مؤقتة في الذاكرة)
 ONBOARDING_STATE = {}  # user_id -> "step_name"
@@ -3222,6 +3238,7 @@ async def parse_memorization_input(text: str) -> dict:
 
 
 
+logger = logging.getLogger(__name__)
 
 
 async def _count_memorized(user_id: int) -> int:
@@ -3235,83 +3252,51 @@ async def _count_memorized(user_id: int) -> int:
 
 async def show_today_dashboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """يعرض ورد اليوم مع أزرار المهام الـ 8."""
-    try:
-        async with AsyncSessionLocal() as session:
-            user = await get_or_create_user(session, update.effective_user.id)
-            if not user.onboarding_done:
-                await start_onboarding(update, context, welcome=False)
-                return
-            await update_user_activity(session, user)
-            progress = await get_or_create_progress(session, user.id)
-            plan = await compute_today_plan(session, user, progress)
+    async with AsyncSessionLocal() as session:
+        user = await get_or_create_user(session, update.effective_user.id)
+        if not user.onboarding_done:
+            await start_onboarding(update, context, welcome=False)
+            return
+        await update_user_activity(session, user)
+        progress = await get_or_create_progress(session, user.id)
+        plan = await compute_today_plan(session, user, progress)
 
-        text = render_today_dashboard(plan)
-        reply_markup = today_dashboard_with_status(plan)
+    text = render_today_dashboard(plan)
+    reply_markup = today_dashboard_with_status(plan)
 
-        if update.message:
-            await update.message.reply_text(
-                text, parse_mode=ParseMode.HTML,
-                reply_markup=reply_markup,
-                disable_web_page_preview=True,
-            )
-        elif update.callback_query:
-            await safe_edit_message(update.callback_query, text, reply_markup)
-    except Exception as e:
-        logger.error(f"show_today_dashboard فشل: {type(e).__name__}: {e}", exc_info=True)
-        try:
-            fallback = "📋 <b>ورد اليوم</b>\n\n⚠️ حدث خطأ أثناء تحميل البيانات."
-            if update.message:
-                await update.message.reply_text(
-                    fallback, parse_mode=ParseMode.HTML,
-                    reply_markup=main_keyboard(),
-                    disable_web_page_preview=True,
-                )
-            elif update.callback_query:
-                await safe_edit_message(update.callback_query, fallback, back_to_today_inline())
-        except Exception:
-            pass
-
+    if update.message:
+        await update.message.reply_text(
+            text, parse_mode=ParseMode.HTML,
+            reply_markup=reply_markup,
+            disable_web_page_preview=True,
+        )
+    elif update.callback_query:
+        await safe_edit_message(update.callback_query, text, reply_markup)
 
 
 async def show_main_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """يعرض لوحة التحكم الشاملة — تجمع معظم الأساسيات في شاشة واحدة."""
-    try:
-        async with AsyncSessionLocal() as session:
-            user = await get_or_create_user(session, update.effective_user.id)
-            if not user.onboarding_done:
-                await start_onboarding(update, context, welcome=False)
-                return
-            await update_user_activity(session, user)
-            progress = await get_or_create_progress(session, user.id)
-            plan = await compute_today_plan(session, user, progress)
+    async with AsyncSessionLocal() as session:
+        user = await get_or_create_user(session, update.effective_user.id)
+        if not user.onboarding_done:
+            await start_onboarding(update, context, welcome=False)
+            return
+        await update_user_activity(session, user)
+        progress = await get_or_create_progress(session, user.id)
+        plan = await compute_today_plan(session, user, progress)
 
-        total_memorized = await _count_memorized(user.id)
-        text = render_main_panel(user, plan, total_memorized)
-        reply_markup = main_panel_inline(plan)
+    total_memorized = await _count_memorized(user.id)
+    text = render_main_panel(user, plan, total_memorized)
+    reply_markup = main_panel_inline(plan)
 
-        if update.message:
-            await update.message.reply_text(
-                text, parse_mode=ParseMode.HTML,
-                reply_markup=reply_markup,
-                disable_web_page_preview=True,
-            )
-        elif update.callback_query:
-            await safe_edit_message(update.callback_query, text, reply_markup)
-    except Exception as e:
-        logger.error(f"show_main_panel فشل: {type(e).__name__}: {e}", exc_info=True)
-        try:
-            fallback = "🏠 <b>لوحة التحكم</b>\n\n⚠️ حدث خطأ أثناء تحميل البيانات."
-            if update.message:
-                await update.message.reply_text(
-                    fallback, parse_mode=ParseMode.HTML,
-                    reply_markup=main_keyboard(),
-                    disable_web_page_preview=True,
-                )
-            elif update.callback_query:
-                await safe_edit_message(update.callback_query, fallback, back_to_today_inline())
-        except Exception:
-            pass
-
+    if update.message:
+        await update.message.reply_text(
+            text, parse_mode=ParseMode.HTML,
+            reply_markup=reply_markup,
+            disable_web_page_preview=True,
+        )
+    elif update.callback_query:
+        await safe_edit_message(update.callback_query, text, reply_markup)
 
 
 async def show_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -3320,12 +3305,12 @@ async def show_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.callback_query:
         await safe_edit_message(
             update.callback_query, text,
-            back_to_today_inline(),
+            _btk(),
         )
     elif update.message:
         await update.message.reply_text(
             text, parse_mode=ParseMode.HTML,
-            reply_markup=back_to_today_inline(),
+            reply_markup=_btk(),
             disable_web_page_preview=True,
         )
 
@@ -3409,6 +3394,7 @@ async def show_pre_session_start(update: Update, context: ContextTypes.DEFAULT_T
 
 
 
+logger = logging.getLogger(__name__)
 
 
 async def _get_plan(update: Update):
@@ -3504,6 +3490,7 @@ async def show_fortress_5(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 
+logger = logging.getLogger(__name__)
 
 
 async def show_progress(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -3566,6 +3553,7 @@ async def show_activity_log(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 
+logger = logging.getLogger(__name__)
 
 # حالة الإدخال اليدوي لكل مستخدم
 INPUT_STATE = {}  # user_id -> ("waiting_for_X", ...)
@@ -3605,8 +3593,8 @@ async def ask_last_page(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await safe_edit_message(update.callback_query, text, back_to_today_inline())
 
 
-async def settings_ask_daily(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """تعديل المقدار اليومي (من لوحة الإعدادات)."""
+async def ask_daily_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """تعديل المقدار اليومي."""
     if update.callback_query:
         text = (
             "📊 <b>تعديل المقدار اليومي</b>\n\n"
@@ -3615,8 +3603,8 @@ async def settings_ask_daily(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await safe_edit_message(update.callback_query, text, daily_amount_inline())
 
 
-async def settings_ask_weekly(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """تعديل المقدار الأسبوعي (من لوحة الإعدادات)."""
+async def ask_weekly_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """تعديل المقدار الأسبوعي."""
     if update.callback_query:
         text = (
             "📚 <b>تعديل المقدار الأسبوعي</b>\n\n"
@@ -3824,6 +3812,7 @@ async def process_free_input(update: Update, context: ContextTypes.DEFAULT_TYPE,
 
 
 
+logger = logging.getLogger(__name__)
 
 
 # خريطة نصوص ReplyKeyboard
@@ -3857,8 +3846,8 @@ async def handle_free_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # 3. لو المستخدم في وضع الـ onboarding
     state = ONBOARDING_STATE.get(user_id)
-    if state and state.startswith("ob_step_"):
-        await _handle_onboarding_text(update, context, user_id, state, text)
+    if state == "ob_step_1_memorization":
+        await process_onboarding_memorization(update, context, text)
         return
 
     # 4. NLP بسيط لفهم أوامر عربية طبيعية
@@ -3918,15 +3907,7 @@ async def try_natural_language(update: Update, context: ContextTypes.DEFAULT_TYP
                 user = await get_or_create_user(session, telegram_id=update.effective_user.id)
                 # إذا الصفحة أكبر من last_hifz_page، نحدّث
                 if page > (user.last_hifz_page or 0):
-                    # تحديث آخر محفوظ بدون حذف السجل السابق
-                    old_last = user.last_hifz_page or 0
-                    user.last_hifz_page = page
-                    user.next_hifz_page = page + 1 if page < config.QURAN_PAGE_COUNT else page
-                    for p in range(old_last + 1, page + 1):
-                        session.add(MemorizationLog(
-                            user_id=user.id, page_number=p, date_memorized=date.today()
-                        ))
-                    await session.commit()
+                    await set_initial_hifz(session, user, page)
                     await update.message.reply_text(
                         f"✅ تم تسجيل حفظ الوجه <b>{page}</b> 🎉",
                         parse_mode=ParseMode.HTML,
@@ -4016,10 +3997,7 @@ async def try_natural_language(update: Update, context: ContextTypes.DEFAULT_TYP
         if parsed["page"] is not None:
             async with AsyncSessionLocal() as session:
                 user = await get_or_create_user(session, telegram_id=update.effective_user.id)
-                page = parsed["page"]
-                # تحديث بدون حذف السجل (استخدام set_last_hifz_page)
-                result = set_last_hifz_page(user, page)
-                await session.commit()
+                await set_initial_hifz(session, user, parsed["page"])
             await update.message.reply_text(
                 f"✅ تم ضبط آخر وجه محفوظ على <b>{parsed['page']}</b>",
                 parse_mode=ParseMode.HTML,
@@ -4041,6 +4019,7 @@ async def try_natural_language(update: Update, context: ContextTypes.DEFAULT_TYP
 
 
 
+logger = logging.getLogger(__name__)
 
 # خريطة أنواع المهام
 
@@ -4103,15 +4082,9 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     # ====== Onboarding: الخطوة 3 (مقدار أسبوعي) ======
-    m = re.match(r"^ob_weekly_(\d+|custom)$", data)
+    m = re.match(r"^ob_weekly_(\d+)$", data)
     if m:
-        val = m.group(1)
-        if val == "custom":
-            ONBOARDING_STATE[update.effective_user.id] = "ob_step_3_weekly_amount_custom"
-            text = "✍️ أرسلي رقمًا (1-30):"
-            await safe_edit_message(query, text, None)
-            return
-        amount = int(val)
+        amount = int(m.group(1))
         if amount in (5, 7, 10, 14):
             async with AsyncSessionLocal() as session:
                 user = await get_or_create_user(session, telegram_id=update.effective_user.id)
@@ -4249,6 +4222,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 
+logger = logging.getLogger(__name__)
 
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -4285,6 +4259,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
         except Exception:
             pass
+
 
 async def today_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await show_today_dashboard(update, context)
@@ -4544,6 +4519,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 
+logger = logging.getLogger(__name__)
 
 
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -4588,16 +4564,7 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.warning(f"⚠️ خطأ شبكة: {error}")
         return
 
-    user_id_str = ""
-    chat_id_str = ""
-    try:
-        if update and update.effective_user:
-            user_id_str = f" | user={update.effective_user.id}"
-        if update and update.effective_chat:
-            chat_id_str = f" | chat={update.effective_chat.id}"
-    except Exception:
-        pass
-    logger.error(f"❌ خطأ{user_id_str}{chat_id_str}: {type(error).__name__}: {error}", exc_info=True)
+    logger.error(f"❌ خطأ: {type(error).__name__}: {error}", exc_info=True)
     if update and getattr(update, "effective_chat", None):
         try:
             if getattr(update, "callback_query", None):
@@ -4622,6 +4589,7 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 
+logger = logging.getLogger(__name__)
 
 scheduler = AsyncIOScheduler(timezone="UTC")
 
@@ -4741,6 +4709,7 @@ async def shutdown_scheduler():
 خادم Keep-alive بسيط — يبقي Render مستيقظًا.
 """
 
+logger = logging.getLogger(__name__)
 
 
 async def _health(request):
@@ -4771,7 +4740,7 @@ async def start_self_ping(interval: int = 280):
         async with aiohttp.ClientSession() as session:
             while True:
                 try:
-                    async with session.get(f"{public_url}/health", timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                    async with session.get(f"{public_url}/health", timeout=10) as resp:
                         if resp.status == 200:
                             logger.debug("🔄 self-ping OK")
                         else:
@@ -4876,13 +4845,13 @@ def build_application():
 def main():
     """نقطة الدخول الرئيسية."""
     try:
-        print("📖 بوت الحصون الخمسة — الإصدار 4.1.0 — البدء", flush=True)
+        print("📖 بوت الحصون الخمسة — الإصدار 4.1.2 — البدء", flush=True)
         print(f"  - المنطقة الزمنية: {config.DEFAULT_TIMEZONE}", flush=True)
         print(f"  - قاعدة البيانات: {config.DATABASE_URL[:50] if config.DATABASE_URL else 'in-memory'}...", flush=True)
         print(f"  - PostgreSQL: {config.is_postgres()}", flush=True)
         print(f"  - BOT_TOKEN مضبوط: {bool(config.BOT_TOKEN)}", flush=True)
         print(f"  - keep-alive: {'مُفعّل' if config.KEEPALIVE_ENABLED else 'مُعطّل'}", flush=True)
-        logger.info("📖 بوت الحصون الخمسة — الإصدار 4.1.0 — البدء")
+        logger.info("📖 بوت الحصون الخمسة — الإصدار 4.1.2 — البدء")
 
         app = build_application()
         print("🚀 تشغيل البوت في وضع polling...", flush=True)
