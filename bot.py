@@ -1,6 +1,6 @@
 """
 ╔══════════════════════════════════════════════════════════════════╗
-║                    بوت الحصون الخمسة — الإصدار 4.1.1                    ║
+║                    بوت الحصون الخمسة — الإصدار 4.1.0                    ║
 ║                  Quran Fortresses Bot — Single File Edition                ║
 ╠══════════════════════════════════════════════════════════════════╣
 ║  مرافقك الشخصي لحفظ القرآن الكريم وفق منهج الحصون الخمسة.               ║
@@ -118,7 +118,6 @@ KEEPALIVE_INTERVAL = int(os.getenv("KEEPALIVE_INTERVAL", "280"))
 # (لا تُغيّر هذه القيم دون فهم تأثيرها على دورات الحفظ والمراجعة)
 
 QURAN_PAGE_COUNT = 604          # عدد أوجه المصحف
-PAGES_PER_HIZB = 10              # عدد أوجه كل حزب (ثابت دائمًا)
 QURAN_HIZB_COUNT = 60          # عدد الأحزاب (كل حزب = 10 أوجه)
 QURAN_JUZ_COUNT = 30           # عدد الأجزاء (كل جزء = 20 وجهًا)
 
@@ -896,6 +895,7 @@ async def init_db():
 
     logger.info("✅ تم تهيئة قاعدة البيانات")
 
+
 async def close_db():
     global _disposed
     await engine.dispose()
@@ -1047,7 +1047,7 @@ def hizb_to_pages(hizb: int) -> tuple[int, int]:
     """حوّل رقم الحزب (1-60) إلى نطاق الأوجه (10 أوجه لكل حزب)."""
     hizb = max(1, min(hizb, config.QURAN_HIZB_COUNT))
     start = (hizb - 1) * config.DAILY_LISTENING_PAGES + 1
-    end = start + PAGES_PER_HIZB - 1
+    end = start + config.DAILY_LISTENING_PAGES - 1
     return start, end
 
 
@@ -1674,16 +1674,6 @@ TASK_FIELD_MAP = {
     "near_review":      "near_review_done",
     "far_review":       "far_review_done",
 }
-TASK_LABELS_AR = {
-    "reading": "📖 القراءة",
-    "listening": "🎧 الاستماع",
-    "weekly_prep": "📚 التحضير الأسبوعي",
-    "nightly_prep": "🌙 التحضير الليلي",
-    "pre_session_prep": "⏱️ التحضير القبلي",
-    "memorize": "🆕 الحفظ",
-    "near_review": "🔄 مراجعة القريب",
-    "far_review": "🔁 مراجعة البعيد",
-}
 
 
 async def get_or_create_progress(
@@ -1956,16 +1946,11 @@ async def generate_suggestions(session: AsyncSession, user: User) -> list[str]:
 معالجات مساعدة مشتركة بين المعالجات الأخرى.
 """
 
+logger = logging.getLogger(__name__)
 
 
 async def safe_edit_message(query, text, reply_markup=None) -> bool:
-    """تحرير رسالة inline بسلامة — يتجاهل 'الرسالة لم تتغيّر'.
-
-    يقطع النص تلقائيًا إذا تجاوز 4096 حرف (حد تيليجرام).
-    """
-    # قطع النص إذا تجاوز الحد
-    if len(text) > 4000:
-        text = text[:3900] + "\n\n⏳ ... (الرسالة طويلة جدًا — بعض التفاصيل لم تُعرض)"
+    """تحرير رسالة inline بسلامة — يتجاهل 'الرسالة لم تتغيّر'."""
     try:
         await query.edit_message_text(
             text, parse_mode=ParseMode.HTML,
@@ -1987,9 +1972,7 @@ async def safe_edit_message(query, text, reply_markup=None) -> bool:
 
 
 async def safe_send_message(bot, chat_id, text, reply_markup=None) -> bool:
-    """إرسال آمن — يقطع النص إذا تجاوز 4096 حرف."""
-    if len(text) > 4000:
-        text = text[:3900] + "\n\n⏳ ... (الرسالة طويلة جدًا)"
+    """إرسال آمن."""
     try:
         await bot.send_message(
             chat_id=chat_id, text=text,
@@ -2012,33 +1995,10 @@ async def safe_send_message(bot, chat_id, text, reply_markup=None) -> bool:
 """
 
 
-async def get_memorization_log(session: AsyncSession, user_id: int) -> list:
-    """يُرجع سجل الحفظ للمستخدم مرتبًا بالأحدث."""
-    result = await session.execute(
-        select(MemorizationLog).where(MemorizationLog.user_id == user_id)
-        .order_by(MemorizationLog.date_memorized.desc(), MemorizationLog.page_number.desc())
-        .limit(30)
-    )
-    return list(result.scalars().all())
-
-
-def render_memorization_log(logs: list) -> str:
-    """يُحوّل سجل الحفظ إلى نص HTML."""
-    if not logs:
-        return "📜 <b>سجل الحفظ</b>\n\nلا يوجد سجل بعد."
-    text = f"📜 <b>سجل الحفظ</b> ({len(logs)} وجه)\n\n"
-    for log in logs:
-        surah = page_to_surah(log.page_number) or "—"
-        text += f"• الوجه <b>{log.page_number}</b> — {surah} ({log.date_memorized})\n"
-    return text
-
-
-# ====== Reply Keyboards — نظام اللوحات المتداخلة ======
-# المستوى 0: لوحة رئيسية
-# المستوى 1: لوحة فرعية لكل قسم (أزرار تفصيلية + 🔙 رجوع)
+# ====== Reply Keyboard الثابتة ======
 
 def main_keyboard() -> ReplyKeyboardMarkup:
-    """اللوحة الرئيسية — المستوى 0 (5 أقسام)."""
+    """اللوحة الرئيسية الثابتة — تظهر دائمًا في الأسفل."""
     return ReplyKeyboardMarkup(
         [
             [KeyboardButton("🏠 لوحة التحكم"), KeyboardButton("📋 ورد اليوم")],
@@ -2051,128 +2011,103 @@ def main_keyboard() -> ReplyKeyboardMarkup:
     )
 
 
-def today_sub_keyboard() -> ReplyKeyboardMarkup:
-    """لوحة ورد اليوم — المستوى 1 (المهام الـ 8 + رجوع)."""
+def _sub_keyboard(rows: list[list[str]], placeholder: str) -> ReplyKeyboardMarkup:
+    """تنشئ لوحة فرعية ثابتة — كل صف قائمة نصوص تُحوَّل لأزرار.
+    
+    جميع اللوحات الفرعية تتضمن تلقائيًا زر "🔙 رجوع" في الصف الأخير.
+    """
+    button_rows = []
+    for row in rows:
+        button_rows.append([KeyboardButton(t) for t in row])
+    button_rows.append([KeyboardButton("🔙 رجوع")])
     return ReplyKeyboardMarkup(
-        [
-            [KeyboardButton("📖 قراءة"), KeyboardButton("🎧 استماع")],
-            [KeyboardButton("📚 تحضير أسبوعي"), KeyboardButton("🌙 تحضير ليلي")],
-            [KeyboardButton("⏱️ تحضير قبلي"), KeyboardButton("🆕 حفظ")],
-            [KeyboardButton("🔄 مراجعة قريب"), KeyboardButton("🔁 مراجعة بعيد")],
-            [KeyboardButton("🔙 رجوع")],
-        ],
+        button_rows,
         resize_keyboard=True,
         is_persistent=True,
-        input_field_placeholder="اختر مهمة أو رجوع ✨",
+        input_field_placeholder=placeholder,
+    )
+
+
+def today_sub_keyboard() -> ReplyKeyboardMarkup:
+    """لوحة فرعية: ورد اليوم — المهام الـ 8."""
+    return _sub_keyboard(
+        [
+            ["📖 قراءة", "🎧 استماع"],
+            ["📚 تحضير أسبوعي", "🌙 تحضير ليلي"],
+            ["⏱️ تحضير قبلي", "🆕 حفظ"],
+            ["🔄 مراجعة قريب", "🔁 مراجعة بعيد"],
+        ],
+        placeholder="اختر مهمة ✨",
     )
 
 
 def fortresses_sub_keyboard() -> ReplyKeyboardMarkup:
-    """لوحة الحصون الخمسة — المستوى 1."""
-    return ReplyKeyboardMarkup(
+    """لوحة فرعية: الحصون الخمسة."""
+    return _sub_keyboard(
         [
-            [KeyboardButton("📖 التهيئة"), KeyboardButton("📚 التحضير")],
-            [KeyboardButton("🆕 الحفظ"), KeyboardButton("🔄 مراجعة القريب")],
-            [KeyboardButton("🔁 مراجعة البعيد")],
-            [KeyboardButton("🔙 رجوع")],
+            ["1️⃣ التهيئة", "2️⃣ التحضير"],
+            ["3️⃣ الحفظ", "4️⃣ القريب"],
+            ["5️⃣ البعيد"],
         ],
-        resize_keyboard=True,
-        is_persistent=True,
-        input_field_placeholder="اختر حصنًا ✨",
+        placeholder="اختر حصنًا ✨",
+    )
+
+
+def control_sub_keyboard() -> ReplyKeyboardMarkup:
+    """لوحة فرعية: لوحة التحكم — اختصارات سريعة."""
+    return _sub_keyboard(
+        [
+            ["📋 ورد اليوم", "🏰 الحصون"],
+            ["📊 تقدمي", "📜 السجل"],
+            ["📝 آخر محفوظ", "⏰ التذكيرات"],
+        ],
+        placeholder="اختر ✨",
     )
 
 
 def progress_sub_keyboard() -> ReplyKeyboardMarkup:
-    """لوحة التقدم — المستوى 1."""
-    return ReplyKeyboardMarkup(
+    """لوحة فرعية: التقدم."""
+    return _sub_keyboard(
         [
-            [KeyboardButton("📈 إحصائيات"), KeyboardButton("📜 سجل الحفظ")],
-            [KeyboardButton("📋 سجل النشاط"), KeyboardButton("💡 اقتراحات")],
-            [KeyboardButton("🔙 رجوع")],
+            ["📊 تقدمي", "📜 السجل"],
         ],
-        resize_keyboard=True,
-        is_persistent=True,
-        input_field_placeholder="اختر قسمًا ✨",
+        placeholder="اختر ✨",
     )
 
 
 def settings_sub_keyboard() -> ReplyKeyboardMarkup:
-    """لوحة الإعدادات — المستوى 1."""
-    return ReplyKeyboardMarkup(
+    """لوحة فرعية: الإعدادات."""
+    return _sub_keyboard(
         [
-            [KeyboardButton("📝 الهدف اليومي"), KeyboardButton("📝 الهدف الأسبوعي")],
-            [KeyboardButton("⏰ التذكيرات"), KeyboardButton("🔔 الإشعارات")],
-            [KeyboardButton("📖 حزب القراءة"), KeyboardButton("🎧 حزب الاستماع")],
-            [KeyboardButton("📝 آخر محفوظ")],
-            [KeyboardButton("🔙 رجوع")],
+            ["📝 آخر محفوظ", "📊 مقدار يومي"],
+            ["📚 مقدار أسبوعي", "⏰ التذكيرات"],
+            ["🔔 الإشعارات"],
         ],
-        resize_keyboard=True,
-        is_persistent=True,
-        input_field_placeholder="اختر إعدادًا ✨",
+        placeholder="اختر ✨",
     )
 
 
-
-async def _handle_onboarding_text(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: int, state: str, text: str):
-    """معالجة الإدخال النصي لخطوات Onboarding 1-4."""
-    if state == "ob_step_1_memorization":
-        await process_onboarding_memorization(update, context, text)
-        return
-
-    if state == "ob_step_2_daily_amount_custom":
-        try:
-            amount = int(text.strip())
-            if not (1 <= amount <= 10):
-                raise ValueError
-        except (ValueError, TypeError):
-            await update.message.reply_text("❌ أدخلي رقمًا بين 1 و 10:", parse_mode=ParseMode.HTML)
-            return
-        async with AsyncSessionLocal() as session:
-            user = await get_or_create_user(session, telegram_id=user_id)
-            await update_settings(session, user, daily_amount=amount)
-        await ask_weekly_amount(update, context)
-        return
-
-    if state == "ob_step_3_weekly_amount_custom":
-        try:
-            amount = int(text.strip())
-            if not (1 <= amount <= 30):
-                raise ValueError
-        except (ValueError, TypeError):
-            await update.message.reply_text("❌ أدخلي رقمًا بين 1 و 30:", parse_mode=ParseMode.HTML)
-            return
-        async with AsyncSessionLocal() as session:
-            user = await get_or_create_user(session, telegram_id=user_id)
-            await update_settings(session, user, weekly_amount=amount)
-        await ask_plan_start_date(update, context)
-        return
-
-    if state == "ob_step_4_plan_start_manual":
-        try:
-            start_date = datetime.strptime(text.strip(), "%Y-%m-%d").date()
-        except (ValueError, TypeError):
-            await update.message.reply_text(
-                "❌ صيغة غير صحيحة. استخدمي <code>YYYY-MM-DD</code>:", parse_mode=ParseMode.HTML)
-            return
-        async with AsyncSessionLocal() as session:
-            user = await get_or_create_user(session, telegram_id=user_id)
-            await update_settings(session, user, plan_start_date=start_date)
-        await ask_reminder_times(update, context)
-        return
+# خريطة: أي زر رئيسي → أي لوحة فرعية تُعرض
+MAIN_TO_SUB_KEYBOARD = {
+    "main_panel": control_sub_keyboard,
+    "today": today_sub_keyboard,
+    "fortresses": fortresses_sub_keyboard,
+    "progress": progress_sub_keyboard,
+    "settings": settings_sub_keyboard,
+}
 
 
 # خريطة نصوص الـ ReplyKeyboard ← أوامر داخلية
-# خريطة نصوص الـ ReplyKeyboard ← نظام اللوحات المتداخلة
-# المستوى 0: أزرار رئيسية (nav_*)
-# المستوى 1: أزرار فرعية (task_*, fortress_*, progress_*, settings_*)
 KEYBOARD_TEXT_MAP = {
-    # ── المستوى 0: رئيسي ──
-    "🏠 لوحة التحكم": "nav_main_panel",
-    "📋 ورد اليوم": "nav_today",
-    "🏰 الحصون الخمسة": "nav_fortresses",
-    "📊 تقدمي": "nav_progress",
-    "⚙️ الإعدادات": "nav_settings",
-    # ── المستوى 1: ورد اليوم ──
+    # === الأزرار الرئيسية ===
+    "🏠 لوحة التحكم": "main_panel",
+    "📋 ورد اليوم": "today",
+    "🏰 الحصون الخمسة": "fortresses",
+    "📊 تقدمي": "progress",
+    "⚙️ الإعدادات": "settings",
+    # === زر الرجوع (مشترك) ===
+    "🔙 رجوع": "back_to_main",
+    # === لوحة فرعية: ورد اليوم (المهام) ===
     "📖 قراءة": "task_reading",
     "🎧 استماع": "task_listening",
     "📚 تحضير أسبوعي": "task_weekly_prep",
@@ -2181,27 +2116,22 @@ KEYBOARD_TEXT_MAP = {
     "🆕 حفظ": "task_memorize",
     "🔄 مراجعة قريب": "task_near_review",
     "🔁 مراجعة بعيد": "task_far_review",
-    # ── المستوى 1: الحصون الخمسة ──
-    "📖 التهيئة": "fortress_1",
-    "📚 التحضير": "fortress_2",
-    "🆕 حفظ": "fortress_3",
-    "🔄 مراجعة القريب": "fortress_4",
-    "🔁 مراجعة البعيد": "fortress_5",
-    # ── المستوى 1: تقدمي ──
-    "📈 إحصائيات": "progress_stats",
-    "📜 سجل الحفظ": "progress_memlog",
-    "📋 سجل النشاط": "progress_activity",
-    "💡 اقتراحات": "progress_suggestions",
-    # ── المستوى 1: الإعدادات ──
-    "📝 الهدف اليومي": "settings_daily",
-    "📝 الهدف الأسبوعي": "settings_weekly",
-    "⏰ التذكيرات": "settings_reminders",
-    "🔔 الإشعارات": "settings_notifications",
-    "📖 حزب القراءة": "settings_reading_hizb",
-    "🎧 حزب الاستماع": "settings_listening_hizb",
-    "📝 آخر محفوظ": "settings_last_page",
-    # ── زر الرجوع (مُشترك) ──
-    "🔙 رجوع": "nav_back",
+    # === لوحة فرعية: الحصون الخمسة ===
+    "1️⃣ التهيئة": "fortress_1",
+    "2️⃣ التحضير": "fortress_2",
+    "3️⃣ الحفظ": "fortress_3",
+    "4️⃣ القريب": "fortress_4",
+    "5️⃣ البعيد": "fortress_5",
+    # === لوحة فرعية: التقدم / لوحة التحكم ===
+    "📜 السجل": "activity_log",
+    # === لوحة فرعية: الإعدادات ===
+    "📝 آخر محفوظ": "set_last_page",
+    "📊 مقدار يومي": "set_daily_amount",
+    "📚 مقدار أسبوعي": "set_weekly_amount",
+    "⏰ التذكيرات": "set_reminders",
+    "🔔 الإشعارات": "set_notifications",
+    # === اختصار في لوحة التحكم الفرعية ===
+    "🏰 الحصون": "fortresses",
 }
 
 
@@ -3077,6 +3007,7 @@ def render_help() -> str:
 
 
 
+logger = logging.getLogger(__name__)
 
 # حالة الـ onboarding لكل مستخدم (مؤقتة في الذاكرة)
 ONBOARDING_STATE = {}  # user_id -> "step_name"
@@ -3350,6 +3281,7 @@ async def parse_memorization_input(text: str) -> dict:
 
 
 
+logger = logging.getLogger(__name__)
 
 
 async def _count_memorized(user_id: int) -> int:
@@ -3363,83 +3295,51 @@ async def _count_memorized(user_id: int) -> int:
 
 async def show_today_dashboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """يعرض ورد اليوم مع أزرار المهام الـ 8."""
-    try:
-        async with AsyncSessionLocal() as session:
-            user = await get_or_create_user(session, update.effective_user.id)
-            if not user.onboarding_done:
-                await start_onboarding(update, context, welcome=False)
-                return
-            await update_user_activity(session, user)
-            progress = await get_or_create_progress(session, user.id)
-            plan = await compute_today_plan(session, user, progress)
+    async with AsyncSessionLocal() as session:
+        user = await get_or_create_user(session, update.effective_user.id)
+        if not user.onboarding_done:
+            await start_onboarding(update, context, welcome=False)
+            return
+        await update_user_activity(session, user)
+        progress = await get_or_create_progress(session, user.id)
+        plan = await compute_today_plan(session, user, progress)
 
-        text = render_today_dashboard(plan)
-        reply_markup = today_dashboard_with_status(plan)
+    text = render_today_dashboard(plan)
+    reply_markup = today_dashboard_with_status(plan)
 
-        if update.message:
-            await update.message.reply_text(
-                text, parse_mode=ParseMode.HTML,
-                reply_markup=reply_markup,
-                disable_web_page_preview=True,
-            )
-        elif update.callback_query:
-            await safe_edit_message(update.callback_query, text, reply_markup)
-    except Exception as e:
-        logger.error(f"show_today_dashboard فشل: {type(e).__name__}: {e}", exc_info=True)
-        try:
-            fallback = "📋 <b>ورد اليوم</b>\n\n⚠️ حدث خطأ أثناء تحميل البيانات."
-            if update.message:
-                await update.message.reply_text(
-                    fallback, parse_mode=ParseMode.HTML,
-                    reply_markup=main_keyboard(),
-                    disable_web_page_preview=True,
-                )
-            elif update.callback_query:
-                await safe_edit_message(update.callback_query, fallback, back_to_today_inline())
-        except Exception:
-            pass
-
+    if update.message:
+        await update.message.reply_text(
+            text, parse_mode=ParseMode.HTML,
+            reply_markup=reply_markup,
+            disable_web_page_preview=True,
+        )
+    elif update.callback_query:
+        await safe_edit_message(update.callback_query, text, reply_markup)
 
 
 async def show_main_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """يعرض لوحة التحكم الشاملة — تجمع معظم الأساسيات في شاشة واحدة."""
-    try:
-        async with AsyncSessionLocal() as session:
-            user = await get_or_create_user(session, update.effective_user.id)
-            if not user.onboarding_done:
-                await start_onboarding(update, context, welcome=False)
-                return
-            await update_user_activity(session, user)
-            progress = await get_or_create_progress(session, user.id)
-            plan = await compute_today_plan(session, user, progress)
+    async with AsyncSessionLocal() as session:
+        user = await get_or_create_user(session, update.effective_user.id)
+        if not user.onboarding_done:
+            await start_onboarding(update, context, welcome=False)
+            return
+        await update_user_activity(session, user)
+        progress = await get_or_create_progress(session, user.id)
+        plan = await compute_today_plan(session, user, progress)
 
-        total_memorized = await _count_memorized(user.id)
-        text = render_main_panel(user, plan, total_memorized)
-        reply_markup = main_panel_inline(plan)
+    total_memorized = await _count_memorized(user.id)
+    text = render_main_panel(user, plan, total_memorized)
+    reply_markup = main_panel_inline(plan)
 
-        if update.message:
-            await update.message.reply_text(
-                text, parse_mode=ParseMode.HTML,
-                reply_markup=reply_markup,
-                disable_web_page_preview=True,
-            )
-        elif update.callback_query:
-            await safe_edit_message(update.callback_query, text, reply_markup)
-    except Exception as e:
-        logger.error(f"show_main_panel فشل: {type(e).__name__}: {e}", exc_info=True)
-        try:
-            fallback = "🏠 <b>لوحة التحكم</b>\n\n⚠️ حدث خطأ أثناء تحميل البيانات."
-            if update.message:
-                await update.message.reply_text(
-                    fallback, parse_mode=ParseMode.HTML,
-                    reply_markup=main_keyboard(),
-                    disable_web_page_preview=True,
-                )
-            elif update.callback_query:
-                await safe_edit_message(update.callback_query, fallback, back_to_today_inline())
-        except Exception:
-            pass
-
+    if update.message:
+        await update.message.reply_text(
+            text, parse_mode=ParseMode.HTML,
+            reply_markup=reply_markup,
+            disable_web_page_preview=True,
+        )
+    elif update.callback_query:
+        await safe_edit_message(update.callback_query, text, reply_markup)
 
 
 async def show_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -3537,6 +3437,7 @@ async def show_pre_session_start(update: Update, context: ContextTypes.DEFAULT_T
 
 
 
+logger = logging.getLogger(__name__)
 
 
 async def _get_plan(update: Update):
@@ -3632,6 +3533,7 @@ async def show_fortress_5(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 
+logger = logging.getLogger(__name__)
 
 
 async def show_progress(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -3694,6 +3596,7 @@ async def show_activity_log(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 
+logger = logging.getLogger(__name__)
 
 # حالة الإدخال اليدوي لكل مستخدم
 INPUT_STATE = {}  # user_id -> ("waiting_for_X", ...)
@@ -3952,181 +3855,166 @@ async def process_free_input(update: Update, context: ContextTypes.DEFAULT_TYPE,
 
 
 
+logger = logging.getLogger(__name__)
 
 
 # خريطة نصوص ReplyKeyboard
 
 
-async def _handle_keyboard_action(update: Update, context: ContextTypes.DEFAULT_TYPE, cmd: str):
-    """معالج أزرار اللوحات المتداخلة — يُنفذ الإجراء ويُبقي اللوحة الفرعية."""
-    user_id = update.effective_user.id
-    msg = update.message
-
-    # ── التنقل: رجوع → لوحة رئيسية ──
-    if cmd == "nav_back":
-        INPUT_STATE.pop(user_id, None)
-        await msg.reply_text(
-            "🏠 <b>القائمة الرئيسية</b>",
-            parse_mode=ParseMode.HTML,
-            reply_markup=main_keyboard(),
-        )
-        return
-
-    # ── التنقل: لوحة التحكم ──
-    if cmd == "nav_main_panel":
-        await show_main_panel(update, context)
-        return
-
-    # ── التنقل: ورد اليوم → عرض ملخص + لوحة فرعية ──
-    if cmd == "nav_today":
-        async with AsyncSessionLocal() as session:
-            user = await get_or_create_user(session, user_id)
-            if not user.onboarding_done:
-                await start_onboarding(update, context, welcome=False)
-                return
-            progress = await get_or_create_progress(session, user.id)
-            plan = await compute_today_plan(session, user, progress)
-        text = render_today_dashboard(plan)
-        await msg.reply_text(text, parse_mode=ParseMode.HTML, disable_web_page_preview=True, reply_markup=today_sub_keyboard())
-        return
-
-    # ── التنقل: الحصون الخمسة → لوحة فرعية ──
-    if cmd == "nav_fortresses":
-        await msg.reply_text(
-            "🏰 <b>الحصون الخمسة</b>\n\nاختر حصنًا لعرض تفاصيله:",
-            parse_mode=ParseMode.HTML, reply_markup=fortresses_sub_keyboard(),
-        )
-        return
-
-    # ── التنقل: تقدمي → لوحة فرعية ──
-    if cmd == "nav_progress":
-        await msg.reply_text(
-            "📊 <b>التقدم والإحصائيات</b>\n\nاختر قسمًا:",
-            parse_mode=ParseMode.HTML, reply_markup=progress_sub_keyboard(),
-        )
-        return
-
-    # ── التنقل: الإعدادات → لوحة فرعية ──
-    if cmd == "nav_settings":
-        async with AsyncSessionLocal() as session:
-            user = await get_or_create_user(session, user_id)
-            result = await session.execute(select(UserSettings).where(UserSettings.user_id == user.id))
-            settings_list = list(result.scalars().all())
-        text = render_settings_panel(user, settings_list)
-        await msg.reply_text(text, parse_mode=ParseMode.HTML, disable_web_page_preview=True, reply_markup=settings_sub_keyboard())
-        return
-
-    # ── المهام: تبديل حالة مهمة ──
-    is_task = cmd.startswith("task_") and cmd[5:] in TASK_FIELD_MAP
-    if is_task:
-        task_type = cmd[5:]
-        async with AsyncSessionLocal() as session:
-            user = await get_or_create_user(session, user_id)
-            progress = await get_or_create_progress(session, user.id)
-            result = await toggle_task(session, user, progress, task_type)
-            await session.refresh(progress)
-            await session.refresh(user)
-        if result.get("success"):
-            action = result["action"]
-            icon = "✅" if action == "done" else "↩️"
-            label = TASK_LABELS_AR.get(task_type, task_type)
-            detail = ""
-            if task_type == "memorize" and action == "done":
-                detail = f" — وصلت للوجه <b>{user.next_hifz_page - 1}</b> 🎉"
-            elif task_type == "reading" and action == "done":
-                detail = f" — الحزب <b>{user.reading_hizb_current}</b>"
-            elif task_type == "listening" and action == "done":
-                detail = f" — الحزب <b>{user.listening_hizb_current}</b>"
-            done_str = "مكتمل" if action == "done" else "تم التراجع"
-            reply_text = f"{icon} {label}: {done_str}{detail}"
-        else:
-            reply_text = "⚠️ لم يتم تسجيل المهمة"
-            if result.get("message"):
-                reply_text += f"\n\n{result['message']}"
-        await msg.reply_text(reply_text, parse_mode=ParseMode.HTML, reply_markup=today_sub_keyboard())
-        return
-
-    # ── الحصون: عرض تفاصيل ──
-    if cmd.startswith("fortress_"):
-        fortress_num = cmd.split("_")[1]
-        plan = await _get_plan(update)
-        if plan is None:
+async def _handle_task_from_keyboard(update: Update, context: ContextTypes.DEFAULT_TYPE, task_type: str):
+    """تسجيل مهمة من لوحة المفاتيح الفرعية — يُرسل رسالة تأكيد بدلًا من تعديل رسالة.
+    
+    يُستدعى عندما يضغط المستخدم زر مهمة (مثل 📖 قراءة) من الـ ReplyKeyboard الفرعية.
+    """
+    async with AsyncSessionLocal() as session:
+        user = await get_or_create_user(session, telegram_id=update.effective_user.id)
+        if not user.onboarding_done:
             await start_onboarding(update, context, welcome=False)
             return
-        renderers = {"1": render_fortress_1, "2": render_fortress_2, "3": render_fortress_3, "4": render_fortress_4, "5": render_fortress_5}
-        renderer = renderers.get(fortress_num)
-        if renderer:
-            text = renderer(plan)
-            await msg.reply_text(text, parse_mode=ParseMode.HTML, disable_web_page_preview=True, reply_markup=fortresses_sub_keyboard())
-        return
+        progress = await get_or_create_progress(session, user.id)
 
-    # ── التقدم ──
-    if cmd == "progress_stats":
-        await show_progress(update, context)
-        return
-    if cmd == "progress_memlog":
-        async with AsyncSessionLocal() as session:
-            user = await get_or_create_user(session, user_id)
-            logs = await get_memorization_log(session, user.id)
-        text = render_memorization_log(logs)
-        await msg.reply_text(text, parse_mode=ParseMode.HTML, disable_web_page_preview=True, reply_markup=progress_sub_keyboard())
-        return
-    if cmd == "progress_activity":
-        await show_activity_log(update, context)
-        return
-    if cmd == "progress_suggestions":
-        async with AsyncSessionLocal() as session:
-            user = await get_or_create_user(session, user_id)
-            suggestions = await generate_suggestions(session, user)
-        text = render_suggestions(suggestions)
-        await msg.reply_text(text, parse_mode=ParseMode.HTML, disable_web_page_preview=True, reply_markup=progress_sub_keyboard())
-        return
+        # التحضير القبلي: حالة خاصة
+        if task_type == "pre_session_prep" and not progress.pre_session_prep_done:
+            if not user.pre_session_started_at:
+                await start_pre_session(session, user, progress)
+                msg = "⏱️ بدأ مؤقّت التحضير القبلي (15 دقيقة)\n\nاقرأ الوجه المطلوب بتركيز، ثم اضغط ⏱️ تحضير قبلي مرة أخرى عند الانتهاء."
+            else:
+                result = await toggle_task(session, user, progress, task_type)
+                msg = "✅ تم إنهاء التحضير القبلي" if result.get("success") else "❌ لم يتم"
+        else:
+            result = await toggle_task(session, user, progress, task_type)
+            if result.get("success"):
+                action = result.get("action")
+                TASK_LABELS = {
+                    "reading": "القراءة 📖", "listening": "الاستماع 🎧",
+                    "weekly_prep": "التحضير الأسبوعي 📚", "nightly_prep": "التحضير الليلي 🌙",
+                    "pre_session_prep": "التحضير القبلي ⏱️", "memorize": "الحفظ 🆕",
+                    "near_review": "مراجعة القريب 🔄", "far_review": "مراجعة البعيد 🔁",
+                }
+                label = TASK_LABELS.get(task_type, task_type)
+                if action == "done":
+                    msg = f"✅ تم إنجاز {label}"
+                else:
+                    msg = f"↩️ تم التراجع عن {label}"
+            elif result.get("message"):
+                msg = result["message"]
+            else:
+                msg = "❌ لم يتم"
 
-    # ── الإعدادات ──
-    if cmd == "settings_daily":
-        await msg.reply_text("📊 <b>اختر المقدار اليومي الجديد:</b>", parse_mode=ParseMode.HTML, reply_markup=daily_amount_inline())
-        return
-    if cmd == "settings_weekly":
-        await msg.reply_text("📚 <b>اختر المقدار الأسبوعي الجديد:</b>", parse_mode=ParseMode.HTML, reply_markup=weekly_amount_inline())
-        return
-    if cmd == "settings_reminders":
-        await show_reminders_settings(update, context)
-        return
-    if cmd == "settings_notifications":
-        async with AsyncSessionLocal() as session:
-            user = await get_or_create_user(session, user_id)
-            new_state = not user.notifications_enabled
-            await update_settings(session, user, notifications=new_state)
-        state_str = "مفعّلة ✅" if new_state else "معطّلة ❌"
-        await msg.reply_text(f"🔔 <b>الإشعارات: {state_str}</b>", parse_mode=ParseMode.HTML, reply_markup=settings_sub_keyboard())
-        return
-    if cmd == "settings_reading_hizb":
-        INPUT_STATE[user_id] = "waiting_for_reading_hizb"
-        await msg.reply_text("📖 <b>تعديل حزب القراءة</b>\n\nأرسلي رقم الحزب (1-60):", parse_mode=ParseMode.HTML, reply_markup=settings_sub_keyboard())
-        return
-    if cmd == "settings_listening_hizb":
-        INPUT_STATE[user_id] = "waiting_for_listening_hizb"
-        await msg.reply_text("🎧 <b>تعديل حزب الاستماع</b>\n\nأرسلي رقم الحزب (1-60):", parse_mode=ParseMode.HTML, reply_markup=settings_sub_keyboard())
-        return
-    if cmd == "settings_last_page":
-        INPUT_STATE[user_id] = "waiting_for_last_page"
-        await msg.reply_text("📝 <b>تعديل آخر وجه محفوظ</b>\n\nأرسلي رقم الوجه:", parse_mode=ParseMode.HTML, reply_markup=settings_sub_keyboard())
-        return
+        await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
 
 
 async def handle_free_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """معالج النص الحر — لوحات متداخلة + NLP + إدخال يدوي."""
+    """معالج النص الحر — NLP بسيط + توجيه للأوامر + تنقل متدرج."""
     user_id = update.effective_user.id
     text = update.message.text.strip()
 
-    # 1. لو النص يطابق أحد أزرار الـ ReplyKeyboard المتداخلة
+    # 1. لو النص يطابق أحد أزرار الـ ReplyKeyboard
     if text in KEYBOARD_TEXT_MAP:
-        # لكن: لو المستخدم في وضع إدخال رقمي، لا نعالج الأزرار (إلا رجوع)
-        if user_id in INPUT_STATE and text != "🔙 رجوع":
-            pass  # نترك الإدخال اليدوي يعالجها
-        else:
-            await _handle_keyboard_action(update, context, KEYBOARD_TEXT_MAP[text])
+        cmd = KEYBOARD_TEXT_MAP[text]
+
+        # === زر الرجوع: استعادة اللوحة الرئيسية ===
+        if cmd == "back_to_main":
+            await update.message.reply_text(
+                "🏠 <b>القائمة الرئيسية</b>",
+                parse_mode=ParseMode.HTML,
+                reply_markup=main_keyboard(),
+            )
             return
+
+        # === الأزرار الرئيسية: عرض المحتوى + تبديل اللوحة الفرعية ===
+        if cmd in MAIN_TO_SUB_KEYBOARD:
+            sub_kb = MAIN_TO_SUB_KEYBOARD[cmd]()
+            if cmd == "main_panel":
+                await show_main_panel(update, context)
+            elif cmd == "today":
+                await show_today_dashboard(update, context)
+            elif cmd == "fortresses":
+                await show_fortresses_menu(update, context)
+            elif cmd == "progress":
+                await show_progress(update, context)
+            elif cmd == "settings":
+                await show_settings_panel(update, context)
+            # تبديل اللوحة الثابتة بالأسفل
+            await update.message.reply_text("👇 اختياراتك بالأسفل", reply_markup=sub_kb)
+            return
+
+        # === أزرار المهام (من لوحة ورد اليوم الفرعية) ===
+        if cmd.startswith("task_"):
+            task_type = cmd[5:]
+            if task_type in TASK_FIELD_MAP:
+                await _handle_task_from_keyboard(update, context, task_type)
+            return
+
+        # === أزرار الحصون (من لوحة الحصون الفرعية) ===
+        if cmd.startswith("fortress_"):
+            plan = await _get_plan(update)
+            if plan is None:
+                await start_onboarding(update, context, welcome=False)
+                return
+            renderers = {
+                "fortress_1": render_fortress_1,
+                "fortress_2": render_fortress_2,
+                "fortress_3": render_fortress_3,
+                "fortress_4": render_fortress_4,
+                "fortress_5": render_fortress_5,
+            }
+            renderer = renderers.get(cmd)
+            if renderer:
+                fort_text = renderer(plan)
+                await update.message.reply_text(
+                    fort_text, parse_mode=ParseMode.HTML,
+                    disable_web_page_preview=True,
+                )
+            return
+
+        # === أزرار فرعية متنوعة ===
+        if cmd == "activity_log":
+            await show_activity_log(update, context)
+            return
+
+        # === أزرار الإعدادات (من لوحة الإعدادات الفرعية) ===
+        if cmd == "set_last_page":
+            INPUT_STATE[user_id] = "waiting_for_last_page"
+            await update.message.reply_text(
+                "📝 <b>تعديل آخر وجه محفوظ</b>\n\n"
+                "أرسلي الآن رقم آخر وجه حفظتِه:\n\n"
+                "مثال: <code>40</code>",
+                parse_mode=ParseMode.HTML,
+            )
+            return
+        if cmd == "set_daily_amount":
+            await update.message.reply_text(
+                "📊 <b>تعديل المقدار اليومي</b>\n\n"
+                "أرسلي المقدار الجديد (عدد الأوجه):",
+                parse_mode=ParseMode.HTML,
+                reply_markup=daily_amount_inline(),
+            )
+            return
+        if cmd == "set_weekly_amount":
+            await update.message.reply_text(
+                "📚 <b>تعديل المقدار الأسبوعي</b>\n\n"
+                "أرسلي المقدار الجديد (عدد الأوجه):",
+                parse_mode=ParseMode.HTML,
+                reply_markup=weekly_amount_inline(),
+            )
+            return
+        if cmd == "set_reminders":
+            await show_reminders_settings(update, context)
+            return
+        if cmd == "set_notifications":
+            async with AsyncSessionLocal() as session:
+                user = await get_or_create_user(session, update.effective_user.id)
+                new_state = not user.notifications_enabled
+                await update_settings(session, user, notifications=new_state)
+                state_str = "مفعّلة ✅" if new_state else "معطّلة ❌"
+            await update.message.reply_text(
+                f"🔔 <b>تم تعديل الإشعارات</b>\n\nالحالة الحالية: <b>{state_str}</b>",
+                parse_mode=ParseMode.HTML,
+            )
+            return
+
+        return
 
     # 2. لو المستخدم في وضع الإدخال اليدوي (إعدادات)
     if user_id in INPUT_STATE:
@@ -4136,8 +4024,8 @@ async def handle_free_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # 3. لو المستخدم في وضع الـ onboarding
     state = ONBOARDING_STATE.get(user_id)
-    if state and state.startswith("ob_step_"):
-        await _handle_onboarding_text(update, context, user_id, state, text)
+    if state == "ob_step_1_memorization":
+        await process_onboarding_memorization(update, context, text)
         return
 
     # 4. NLP بسيط لفهم أوامر عربية طبيعية
@@ -4147,7 +4035,7 @@ async def handle_free_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # 5. نص حر غير مفهوم
     await update.message.reply_text(
-        "٠️ <b>اضغط أحد أزرار القائمة بالأسفل</b>\n\n"
+        "💡 <b>اضغط أحد أزرار القائمة بالأسفل</b>\n\n"
         "أو جرّب:\n"
         "• <code>صفحة 50</code> — تعديل آخر محفوظ\n"
         "• <code>وش نحفظ اليوم؟</code> — عرض ورد اليوم\n"
@@ -4157,6 +4045,7 @@ async def handle_free_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=main_keyboard(),
         disable_web_page_preview=True,
     )
+
 
 async def try_natural_language(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str) -> bool:
     """محاولة فهم اللغة الطبيعية العربية.
@@ -4196,15 +4085,7 @@ async def try_natural_language(update: Update, context: ContextTypes.DEFAULT_TYP
                 user = await get_or_create_user(session, telegram_id=update.effective_user.id)
                 # إذا الصفحة أكبر من last_hifz_page، نحدّث
                 if page > (user.last_hifz_page or 0):
-                    # تحديث آخر محفوظ بدون حذف السجل السابق
-                    old_last = user.last_hifz_page or 0
-                    user.last_hifz_page = page
-                    user.next_hifz_page = page + 1 if page < config.QURAN_PAGE_COUNT else page
-                    for p in range(old_last + 1, page + 1):
-                        session.add(MemorizationLog(
-                            user_id=user.id, page_number=p, date_memorized=date.today()
-                        ))
-                    await session.commit()
+                    await set_initial_hifz(session, user, page)
                     await update.message.reply_text(
                         f"✅ تم تسجيل حفظ الوجه <b>{page}</b> 🎉",
                         parse_mode=ParseMode.HTML,
@@ -4294,10 +4175,7 @@ async def try_natural_language(update: Update, context: ContextTypes.DEFAULT_TYP
         if parsed["page"] is not None:
             async with AsyncSessionLocal() as session:
                 user = await get_or_create_user(session, telegram_id=update.effective_user.id)
-                page = parsed["page"]
-                # تحديث بدون حذف السجل (استخدام set_last_hifz_page)
-                result = set_last_hifz_page(user, page)
-                await session.commit()
+                await set_initial_hifz(session, user, parsed["page"])
             await update.message.reply_text(
                 f"✅ تم ضبط آخر وجه محفوظ على <b>{parsed['page']}</b>",
                 parse_mode=ParseMode.HTML,
@@ -4319,6 +4197,7 @@ async def try_natural_language(update: Update, context: ContextTypes.DEFAULT_TYP
 
 
 
+logger = logging.getLogger(__name__)
 
 # خريطة أنواع المهام
 
@@ -4381,15 +4260,9 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     # ====== Onboarding: الخطوة 3 (مقدار أسبوعي) ======
-    m = re.match(r"^ob_weekly_(\d+|custom)$", data)
+    m = re.match(r"^ob_weekly_(\d+)$", data)
     if m:
-        val = m.group(1)
-        if val == "custom":
-            ONBOARDING_STATE[update.effective_user.id] = "ob_step_3_weekly_amount_custom"
-            text = "✍️ أرسلي رقمًا (1-30):"
-            await safe_edit_message(query, text, None)
-            return
-        amount = int(val)
+        amount = int(m.group(1))
         if amount in (5, 7, 10, 14):
             async with AsyncSessionLocal() as session:
                 user = await get_or_create_user(session, telegram_id=update.effective_user.id)
@@ -4527,42 +4400,28 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 
+logger = logging.getLogger(__name__)
 
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """الأمر /start — يبدأ الـ onboarding أو يعرض لوحة التحكم الشاملة."""
-    try:
-        user_info = update.effective_user
-        if not user_info:
-            logger.warning("start_command: effective_user is None")
-            return
-        async with AsyncSessionLocal() as session:
-            user = await get_or_create_user(session, user_info.id, user_info.username, user_info.full_name)
-            needs_onboarding = not user.onboarding_done
+    user_info = update.effective_user
+    async with AsyncSessionLocal() as session:
+        user = await get_or_create_user(session, user_info.id, user_info.username, user_info.full_name)
+        needs_onboarding = not user.onboarding_done
 
-        if needs_onboarding:
-            await start_onboarding(update, context, welcome=True)
-            return
+    if needs_onboarding:
+        await start_onboarding(update, context, welcome=True)
+        return
 
-        await update.message.reply_text(
-            "👋 <b>أهلًا بعودتك!</b> 🌟\nإليكِ <b>لوحة التحكم</b> 👇",
-            parse_mode=ParseMode.HTML,
-            reply_markup=main_keyboard(),
-            disable_web_page_preview=True,
-        )
-        await show_main_panel(update, context)
-    except Exception as e:
-        logger.error(f"start_command فشل: {type(e).__name__}: {e}", exc_info=True)
-        try:
-            if update.message:
-                await update.message.reply_text(
-                    "⚠️ حدث خطأ أثناء التحميل. جرّب <code>/start</code> مرة أخرى.",
-                    parse_mode=ParseMode.HTML,
-                    reply_markup=main_keyboard(),
-                    disable_web_page_preview=True,
-                )
-        except Exception:
-            pass
+    await update.message.reply_text(
+        f"👋 <b>أهلًا بعودتك!</b> 🌟\nإليكِ <b>لوحة التحكم</b> 👇",
+        parse_mode=ParseMode.HTML,
+        reply_markup=main_keyboard(),
+        disable_web_page_preview=True,
+    )
+    await show_main_panel(update, context)
+
 
 async def today_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await show_today_dashboard(update, context)
@@ -4822,6 +4681,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 
+logger = logging.getLogger(__name__)
 
 
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -4866,16 +4726,7 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.warning(f"⚠️ خطأ شبكة: {error}")
         return
 
-    user_id_str = ""
-    chat_id_str = ""
-    try:
-        if update and update.effective_user:
-            user_id_str = f" | user={update.effective_user.id}"
-        if update and update.effective_chat:
-            chat_id_str = f" | chat={update.effective_chat.id}"
-    except Exception:
-        pass
-    logger.error(f"❌ خطأ{user_id_str}{chat_id_str}: {type(error).__name__}: {error}", exc_info=True)
+    logger.error(f"❌ خطأ: {type(error).__name__}: {error}", exc_info=True)
     if update and getattr(update, "effective_chat", None):
         try:
             if getattr(update, "callback_query", None):
@@ -4900,6 +4751,7 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 
+logger = logging.getLogger(__name__)
 
 scheduler = AsyncIOScheduler(timezone="UTC")
 
@@ -5019,6 +4871,7 @@ async def shutdown_scheduler():
 خادم Keep-alive بسيط — يبقي Render مستيقظًا.
 """
 
+logger = logging.getLogger(__name__)
 
 
 async def _health(request):
