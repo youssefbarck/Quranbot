@@ -89,8 +89,13 @@ from telegram.ext import (
 
 
 
+# ═══ fix: asyncpg يرفض datetime مع tzinfo في عمود WITHOUT TIME ZONE ═══
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
 # ══════════════════════════════════════════════════════════════════════
-# ═══ 1. الإعدادات والثوابت ═══
+# ═══ 1. الإعدادات والثوابت ═===
 # المصدر: config.py
 # ══════════════════════════════════════════════════════════════════════
 
@@ -528,8 +533,8 @@ class User(Base):
     pre_session_started_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
 
     # ====== الطوابع الزمنية ======
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, onupdate=_utcnow)
 
     # العلاقات
     settings_rel: Mapped[list["UserSettings"]] = relationship(back_populates="user", cascade="all, delete-orphan")
@@ -598,7 +603,7 @@ class ActivityLog(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
     log_date: Mapped[date] = mapped_column(Date, default=date.today, index=True)
-    log_time: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
+    log_time: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
     event_type: Mapped[str] = mapped_column(String(32))  # memorize / reading_done / setting_change / ...
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
@@ -618,7 +623,7 @@ class FarReviewCycle(Base):
     cycle_start: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     cycle_end: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     last_completed_cycle: Mapped[int] = mapped_column(Integer, default=0)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, onupdate=_utcnow)
 
     user: Mapped["User"] = relationship(back_populates="far_review_state")
 
@@ -1453,7 +1458,7 @@ def get_pre_session_prep_page(user: User) -> dict:
 
 def start_pre_session_timer(user: User) -> datetime:
     """بدء مؤقّت التحضير القبلي."""
-    user.pre_session_started_at = datetime.now(timezone.utc)
+    user.pre_session_started_at = _utcnow()
     return user.pre_session_started_at
 
 
@@ -1461,7 +1466,7 @@ def end_pre_session_timer(user: User) -> int:
     """إنهاء المؤقّت — يُعيد عدد الدقائق المنقضية."""
     if not user.pre_session_started_at:
         return 0
-    duration = (datetime.now(timezone.utc) - user.pre_session_started_at).total_seconds() / 60.0
+    duration = (_utcnow() - user.pre_session_started_at).total_seconds() / 60.0
     minutes = int(duration)
     user.pre_session_started_at = None
     return minutes
@@ -1471,7 +1476,7 @@ def get_pre_session_elapsed_minutes(user: User) -> int:
     """الوقت المنقضي منذ بدء المؤقّت (دقائق)."""
     if not user.pre_session_started_at:
         return 0
-    duration = (datetime.now(timezone.utc) - user.pre_session_started_at).total_seconds() / 60.0
+    duration = (_utcnow() - user.pre_session_started_at).total_seconds() / 60.0
     return int(duration)
 
 
