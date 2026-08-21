@@ -2001,7 +2001,7 @@ async def analyze_user_patterns(session: AsyncSession, user_id: int) -> dict:
     logs = list(result.scalars().all())
 
     # الساعات الأكثر إنجازًا
-    hours = [log.log_time.hour for log in logs if log.event_type.startswith("done_")]
+    hours = [log.log_time.hour for log in logs if log.log_time and log.event_type.startswith("done_")]
     hour_counts = Counter(hours)
     most_active_hour = hour_counts.most_common(1)[0][0] if hour_counts else None
 
@@ -2746,7 +2746,8 @@ def render_fortress_3(plan: dict) -> str:
         parts.append(f"📍 الأوجه المطلوبة: <b>{fmt_range(h['start'], h['end'])}</b>")
         surah = quran_data.page_to_surah(h["start"])
         juz = quran_data.page_to_juz(h["start"])
-        parts.append(f"📖 السورة: <b>{esc(surah.name_ar)}</b>")
+        surah_name = esc(surah.name_ar) if surah else "—"
+        parts.append(f"📖 السورة: <b>{surah_name}</b>")
         parts.append(f"📚 الجزء: <b>{juz}</b>")
         parts.append(f"📊 المقدار: <b>{user.daily_hifz_amount} وجه/يوم</b>")
     else:
@@ -2778,7 +2779,9 @@ def render_fortress_4(plan: dict) -> str:
         parts.append(f"📍 الأوجه <b>{fmt_range(nr['start'], nr['end'])}</b> (آخر 20 وجه محفوظ)")
         start_surah = quran_data.page_to_surah(nr["start"])
         end_surah = quran_data.page_to_surah(nr["end"])
-        parts.append(f"📖 السور: {esc(start_surah.name_ar)} ← {esc(end_surah.name_ar)}")
+        s_name = esc(start_surah.name_ar) if start_surah else "—"
+        e_name = esc(end_surah.name_ar) if end_surah else "—"
+        parts.append(f"📖 السور: {s_name} ← {e_name}")
         parts.append(f"📊 العدد: <b>{nr['count']} وجه</b>")
         parts.extend([
             "",
@@ -2802,7 +2805,9 @@ def render_fortress_5(plan: dict) -> str:
         parts.append(f"📍 الأوجه <b>{fmt_range(fr['cycle_start'], fr['cycle_end'])}</b>")
         start_surah = quran_data.page_to_surah(fr["cycle_start"])
         end_surah = quran_data.page_to_surah(fr["cycle_end"])
-        parts.append(f"📖 السور: {esc(start_surah.name_ar)} ← {esc(end_surah.name_ar)}")
+        s_name = esc(start_surah.name_ar) if start_surah else "—"
+        e_name = esc(end_surah.name_ar) if end_surah else "—"
+        parts.append(f"📖 السور: {s_name} ← {e_name}")
         parts.append(f"🔄 الدورة: <b>{fr['current_cycle']}/{fr['total_cycles']}</b>")
         parts.extend([
             "",
@@ -3351,12 +3356,12 @@ async def show_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.callback_query:
         await safe_edit_message(
             update.callback_query, text,
-            _btk(),
+            main_keyboard(),
         )
     elif update.message:
         await update.message.reply_text(
             text, parse_mode=ParseMode.HTML,
-            reply_markup=_btk(),
+            reply_markup=main_keyboard(),
             disable_web_page_preview=True,
         )
 
@@ -3639,8 +3644,7 @@ async def ask_last_page(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await safe_edit_message(update.callback_query, text, back_to_today_inline())
 
 
-async def ask_daily_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """تعديل المقدار اليومي."""
+async def settings_ask_daily_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.callback_query:
         text = (
             "📊 <b>تعديل المقدار اليومي</b>\n\n"
@@ -3649,7 +3653,7 @@ async def ask_daily_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await safe_edit_message(update.callback_query, text, daily_amount_inline())
 
 
-async def ask_weekly_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def settings_ask_weekly_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """تعديل المقدار الأسبوعي."""
     if update.callback_query:
         text = (
@@ -4212,10 +4216,10 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await ask_last_page(update, context)
         return
     if data == "set_daily_amount":
-        await settings_ask_daily(update, context)
+        await settings_ask_daily_amount(update, context)
         return
     if data == "set_weekly_amount":
-        await settings_ask_weekly(update, context)
+        await settings_ask_weekly_amount(update, context)
         return
     if data == "set_reading_hizb":
         await ask_reading_hizb(update, context)
@@ -4891,13 +4895,13 @@ def build_application():
 def main():
     """نقطة الدخول الرئيسية."""
     try:
-        print("📖 بوت الحصون الخمسة — الإصدار 4.1.2 — البدء", flush=True)
+        print("📖 بوت الحصون الخمسة — الإصدار 4.1.3 — البدء", flush=True)
         print(f"  - المنطقة الزمنية: {config.DEFAULT_TIMEZONE}", flush=True)
         print(f"  - قاعدة البيانات: {config.DATABASE_URL[:50] if config.DATABASE_URL else 'in-memory'}...", flush=True)
         print(f"  - PostgreSQL: {config.is_postgres()}", flush=True)
         print(f"  - BOT_TOKEN مضبوط: {bool(config.BOT_TOKEN)}", flush=True)
         print(f"  - keep-alive: {'مُفعّل' if config.KEEPALIVE_ENABLED else 'مُعطّل'}", flush=True)
-        logger.info("📖 بوت الحصون الخمسة — الإصدار 4.1.2 — البدء")
+        logger.info("📖 بوت الحصون الخمسة — الإصدار 4.1.3 — البدء")
 
         app = build_application()
         print("🚀 تشغيل البوت في وضع polling...", flush=True)
