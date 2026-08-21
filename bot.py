@@ -819,108 +819,15 @@ class _SessionLocalProxy:
 AsyncSessionLocal = _SessionLocalProxy()
 
 
-async def _cleanup_orphan_db_objects():
-    """تنظيف العناصر اليتيمة في قاعدة بيانات PostgreSQL.
-
-    يُعالج حالتين:
-    1. قيد/فهرس يتيم (مثل uq_user_page) — موجود في pg_class/pg_constraint
-       لكن غير مرتبط بأي جدول حقيقي.
-    2. أعمدة زائدة في الجداول (مثل reading_pages في daily_progress)
-       التي توجد في DB لكن ليست في نموذج SQLAlchemy وتسبب NOT NULL violation.
-    """
-    # ── 1. حذف القيود/الفهارس اليتيمة ──
-    try:
-        async with engine.begin() as conn:
-            # التحقق: هل uq_user_page موجود كـ constraint في pg_constraint؟
-            result = await conn.execute(sqlalchemy.text(
-                "SELECT c.oid, c.conrelid, t.relname AS parent_table "
-                "FROM pg_constraint c "
-                "LEFT JOIN pg_class t ON c.conrelid = t.oid "
-                "WHERE c.conname = 'uq_user_page'"
-            ))
-            constraint_row = result.first()
-
-            if constraint_row and constraint_row.parent_table is None:
-                # القيد موجود لكن بدون جدول أب — يتيم
-                logger.warning("⚠️ اكتُشف قيد يتيم uq_user_page — سيتم حذفه")
-                await conn.execute(sqlalchemy.text(
-                    "DELETE FROM pg_constraint WHERE conname = 'uq_user_page' AND conrelid = 0"
-                ))
-                await conn.execute(sqlalchemy.text(
-                    "DELETE FROM pg_class WHERE relname = 'uq_user_page' AND relkind = 'i'"
-                ))
-                logger.info("✅ تم حذف القيد اليتيم uq_user_page")
-            elif constraint_row and constraint_row.parent_table:
-                logger.info(f"✅ uq_user_page مرتبط بجدول {constraint_row.parent_table} — طبيعي")
-            else:
-                # لا يوجد كـ constraint — تحقق من pg_class مباشرة (فهرس يتيم)
-                result2 = await conn.execute(sqlalchemy.text(
-                    "SELECT oid, relname FROM pg_class WHERE relname = 'uq_user_page' AND relkind = 'i'"
-                ))
-                idx_row = result2.first()
-                if idx_row:
-                    result3 = await conn.execute(sqlalchemy.text(
-                        "SELECT d.refobjid, t.relname AS parent_table "
-                        "FROM pg_depend d "
-                        "JOIN pg_class t ON d.refobjid = t.oid "
-                        "WHERE d.objid = :oid AND d.deptype = 'i'"
-                    ), {"oid": idx_row.oid})
-                    dep_row = result3.first()
-                    if not dep_row:
-                        logger.warning("⚠️ اكتُشف فهرس يتيم uq_user_page بدون جدول أب — سيتم حذفه")
-                        await conn.execute(sqlalchemy.text(
-                            "DELETE FROM pg_depend WHERE objid = :oid"
-                        ), {"oid": idx_row.oid})
-                        await conn.execute(sqlalchemy.text(
-                            "DELETE FROM pg_class WHERE oid = :oid"
-                        ), {"oid": idx_row.oid})
-                        logger.info("✅ تم حذف الفهرس اليتيم uq_user_page")
-    except Exception as e:
-        logger.warning(f"⚠️ تعذّر تنظيف uq_user_page: {e}")
-
-    # ── 2. معالجة الأعمدة الزائدة في daily_progress ──
-    try:
-        async with engine.begin() as conn:
-            model_columns = {c.name for c in DailyProgress.__table__.columns}
-            result = await conn.execute(sqlalchemy.text(
-                "SELECT column_name, is_nullable "
-                "FROM information_schema.columns "
-                "WHERE table_name = 'daily_progress'"
-            ))
-            for row in result:
-                col_name = row.column_name
-                if col_name not in model_columns and row.is_nullable == 'NO':
-                    logger.warning(f"⚠️ عمود زائد NOT NULL في daily_progress: {col_name} — سيُجعل nullable")
-                    await conn.execute(sqlalchemy.text(
-                        f"ALTER TABLE daily_progress ALTER COLUMN {col_name} DROP NOT NULL"
-                    ))
-                    logger.info(f"✅ تم جعل {col_name} يقبل NULL")
-    except Exception as e:
-        logger.warning(f"⚠️ تعذّر معالجة الأعمدة الزائدة: {e}")
-
-    # ── 3. التأكد من وجود جدول user_settings ──
-    try:
-        async with engine.begin() as conn:
-            await conn.execute(sqlalchemy.text(
-                "CREATE TABLE IF NOT EXISTS user_settings ("
-                "id SERIAL PRIMARY KEY, "
-                "user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, "
-                "reminder_type VARCHAR(32) NOT NULL, "
-                "reminder_time VARCHAR(5) NOT NULL, "
-                "enabled BOOLEAN DEFAULT TRUE, "
-                "UNIQUE (user_id, reminder_type)"
-                ")"
-            ))
-    except Exception as e:
-        logger.warning(f"⚠️ تعذّر إنشاء user_settings: {e}")
-
-
 async def init_db():
-    """تهيئة قاعدة البيانات — تنظيف + migrations + create_all.
+    """تهيئة قاعدة البيانات — migrations و create_all في معاملات منفصلة.
 
-    المراحل:
-    0. تنظيف: إزالة القيود والأعمدة اليتيمة التي لا تتوافق مع النموذج
-    1. معاملة منفصلة: MIGRATION_STATEMENTS + العبارات المُولّدة من النموذج
+    نقطة حرجة: في PostgreSQL، إذا فشل أي statement في معاملة، تصبح المعاملة
+    "aborted" وكل التغييرات تُتراجع عند الـ commit. لذا يجب فصل migrations
+    عن create_all في معاملات منفصلة، وإلا فقد تُتراجع migrations إذا فشل create_all.
+
+    الترتيب:
+    1. معاملة منفصلة: MIGRATION_STATEMENTS (ALTER TABLE ADD COLUMN IF NOT EXISTS)
     2. معاملة منفصلة: Base.metadata.create_all (ينشئ الجداول الجديدة فقط)
     """
     global engine, _session_maker, _disposed
@@ -938,11 +845,9 @@ async def init_db():
     _db_preview = "(مضبوط)" if config.DATABASE_URL else "(in-memory)"
     logger.info(f"📋 قاعدة البيانات: {_db_preview}")
 
-    if is_pg:
-        # ── المرحلة 0: تنظيف القيود والأعمدة اليتيمة ──
-        await _cleanup_orphan_db_objects()
-
-    # ── المرحلة 1: migrations ──
+    # ── المعاملة 1: migrations ──
+    # نجمع: العبارات الثابتة + العبارات المُولّدة ديناميكيًا من النموذج
+    # هذا يضمن عدم تفويت أي عمود (مثل updated_at الذي كان مفقودًا سابقًا)
     if is_pg:
         all_migrations = list(MIGRATION_STATEMENTS) + generate_migrations_from_model()
         # إزالة التكرار (نفس العبارة قد تظهر مرتين)
@@ -964,7 +869,8 @@ async def init_db():
                 logger.debug(f"migration skip: {stmt[:60]}... → {e}")
         logger.info(f"✅ migrations: {success_count}/{len(unique_migrations)} نجحت")
 
-    # ── المرحلة 2: create_all ──
+    # ── المعاملة 2: create_all ──
+    # ينشئ الجداول الجديدة فقط (checkfirst=True). في معاملة منفصلة تمامًا.
     try:
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
@@ -972,7 +878,7 @@ async def init_db():
     except Exception as e:
         logger.warning(f"⚠️ create_all تخطّى بعض العناصر: {e}")
 
-    # ── التحقق: هل الأعمدة الأساسية موجودة فعلاً؟ ──
+    # ── التحقق: هل الأعمدة موجودة فعلاً؟ ──
     if is_pg:
         try:
             async with engine.begin() as conn:
@@ -1768,6 +1674,16 @@ TASK_FIELD_MAP = {
     "near_review":      "near_review_done",
     "far_review":       "far_review_done",
 }
+TASK_LABELS_AR = {
+    "reading": "📖 القراءة",
+    "listening": "🎧 الاستماع",
+    "weekly_prep": "📚 التحضير الأسبوعي",
+    "nightly_prep": "🌙 التحضير الليلي",
+    "pre_session_prep": "⏱️ التحضير القبلي",
+    "memorize": "🆕 الحفظ",
+    "near_review": "🔄 مراجعة القريب",
+    "far_review": "🔁 مراجعة البعيد",
+}
 
 
 async def get_or_create_progress(
@@ -2096,18 +2012,33 @@ async def safe_send_message(bot, chat_id, text, reply_markup=None) -> bool:
 """
 
 
-# ====== Reply Keyboard الثابتة ======
+async def get_memorization_log(session: AsyncSession, user_id: int) -> list:
+    """يُرجع سجل الحفظ للمستخدم مرتبًا بالأحدث."""
+    result = await session.execute(
+        select(MemorizationLog).where(MemorizationLog.user_id == user_id)
+        .order_by(MemorizationLog.date_memorized.desc(), MemorizationLog.page_number.desc())
+        .limit(30)
+    )
+    return list(result.scalars().all())
+
+
+def render_memorization_log(logs: list) -> str:
+    """يُحوّل سجل الحفظ إلى نص HTML."""
+    if not logs:
+        return "📜 <b>سجل الحفظ</b>\n\nلا يوجد سجل بعد."
+    text = f"📜 <b>سجل الحفظ</b> ({len(logs)} وجه)\n\n"
+    for log in logs:
+        surah = page_to_surah(log.page_number) or "—"
+        text += f"• الوجه <b>{log.page_number}</b> — {surah} ({log.date_memorized})\n"
+    return text
+
+
+# ====== Reply Keyboards — نظام اللوحات المتداخلة ======
+# المستوى 0: لوحة رئيسية
+# المستوى 1: لوحة فرعية لكل قسم (أزرار تفصيلية + 🔙 رجوع)
 
 def main_keyboard() -> ReplyKeyboardMarkup:
-    """اللوحة الرئيسية الثابتة — تظهر دائمًا في الأسفل.
-    
-    5 أزرار تغطّي كل أقسام البوت:
-      - لوحة التحكم: نظرة شاملة على اليوم
-      - ورد اليوم: المهام الـ 8 مع أزرار التسجيل
-      - الحصون الخمسة: تفاصيل كل حصن
-      - تقدمي: الإحصائيات والإنجازات
-      - الإعدادات: تخصيص كل شيء
-    """
+    """اللوحة الرئيسية — المستوى 0 (5 أقسام)."""
     return ReplyKeyboardMarkup(
         [
             [KeyboardButton("🏠 لوحة التحكم"), KeyboardButton("📋 ورد اليوم")],
@@ -2117,6 +2048,67 @@ def main_keyboard() -> ReplyKeyboardMarkup:
         resize_keyboard=True,
         is_persistent=True,
         input_field_placeholder="اضغط أحد الأزرار بالأسفل ✨",
+    )
+
+
+def today_sub_keyboard() -> ReplyKeyboardMarkup:
+    """لوحة ورد اليوم — المستوى 1 (المهام الـ 8 + رجوع)."""
+    return ReplyKeyboardMarkup(
+        [
+            [KeyboardButton("📖 قراءة"), KeyboardButton("🎧 استماع")],
+            [KeyboardButton("📚 تحضير أسبوعي"), KeyboardButton("🌙 تحضير ليلي")],
+            [KeyboardButton("⏱️ تحضير قبلي"), KeyboardButton("🆕 حفظ")],
+            [KeyboardButton("🔄 مراجعة قريب"), KeyboardButton("🔁 مراجعة بعيد")],
+            [KeyboardButton("🔙 رجوع")],
+        ],
+        resize_keyboard=True,
+        is_persistent=True,
+        input_field_placeholder="اختر مهمة أو رجوع ✨",
+    )
+
+
+def fortresses_sub_keyboard() -> ReplyKeyboardMarkup:
+    """لوحة الحصون الخمسة — المستوى 1."""
+    return ReplyKeyboardMarkup(
+        [
+            [KeyboardButton("📖 التهيئة"), KeyboardButton("📚 التحضير")],
+            [KeyboardButton("🆕 الحفظ"), KeyboardButton("🔄 مراجعة القريب")],
+            [KeyboardButton("🔁 مراجعة البعيد")],
+            [KeyboardButton("🔙 رجوع")],
+        ],
+        resize_keyboard=True,
+        is_persistent=True,
+        input_field_placeholder="اختر حصنًا ✨",
+    )
+
+
+def progress_sub_keyboard() -> ReplyKeyboardMarkup:
+    """لوحة التقدم — المستوى 1."""
+    return ReplyKeyboardMarkup(
+        [
+            [KeyboardButton("📈 إحصائيات"), KeyboardButton("📜 سجل الحفظ")],
+            [KeyboardButton("📋 سجل النشاط"), KeyboardButton("💡 اقتراحات")],
+            [KeyboardButton("🔙 رجوع")],
+        ],
+        resize_keyboard=True,
+        is_persistent=True,
+        input_field_placeholder="اختر قسمًا ✨",
+    )
+
+
+def settings_sub_keyboard() -> ReplyKeyboardMarkup:
+    """لوحة الإعدادات — المستوى 1."""
+    return ReplyKeyboardMarkup(
+        [
+            [KeyboardButton("📝 الهدف اليومي"), KeyboardButton("📝 الهدف الأسبوعي")],
+            [KeyboardButton("⏰ التذكيرات"), KeyboardButton("🔔 الإشعارات")],
+            [KeyboardButton("📖 حزب القراءة"), KeyboardButton("🎧 حزب الاستماع")],
+            [KeyboardButton("📝 آخر محفوظ")],
+            [KeyboardButton("🔙 رجوع")],
+        ],
+        resize_keyboard=True,
+        is_persistent=True,
+        input_field_placeholder="اختر إعدادًا ✨",
     )
 
 
@@ -2170,12 +2162,46 @@ async def _handle_onboarding_text(update: Update, context: ContextTypes.DEFAULT_
 
 
 # خريطة نصوص الـ ReplyKeyboard ← أوامر داخلية
+# خريطة نصوص الـ ReplyKeyboard ← نظام اللوحات المتداخلة
+# المستوى 0: أزرار رئيسية (nav_*)
+# المستوى 1: أزرار فرعية (task_*, fortress_*, progress_*, settings_*)
 KEYBOARD_TEXT_MAP = {
-    "🏠 لوحة التحكم": "main_panel",
-    "📋 ورد اليوم": "today",
-    "📊 تقدمي": "progress",
-    "🏰 الحصون الخمسة": "fortresses",
-    "⚙️ الإعدادات": "settings",
+    # ── المستوى 0: رئيسي ──
+    "🏠 لوحة التحكم": "nav_main_panel",
+    "📋 ورد اليوم": "nav_today",
+    "🏰 الحصون الخمسة": "nav_fortresses",
+    "📊 تقدمي": "nav_progress",
+    "⚙️ الإعدادات": "nav_settings",
+    # ── المستوى 1: ورد اليوم ──
+    "📖 قراءة": "task_reading",
+    "🎧 استماع": "task_listening",
+    "📚 تحضير أسبوعي": "task_weekly_prep",
+    "🌙 تحضير ليلي": "task_nightly_prep",
+    "⏱️ تحضير قبلي": "task_pre_session_prep",
+    "🆕 حفظ": "task_memorize",
+    "🔄 مراجعة قريب": "task_near_review",
+    "🔁 مراجعة بعيد": "task_far_review",
+    # ── المستوى 1: الحصون الخمسة ──
+    "📖 التهيئة": "fortress_1",
+    "📚 التحضير": "fortress_2",
+    "🆕 حفظ": "fortress_3",
+    "🔄 مراجعة القريب": "fortress_4",
+    "🔁 مراجعة البعيد": "fortress_5",
+    # ── المستوى 1: تقدمي ──
+    "📈 إحصائيات": "progress_stats",
+    "📜 سجل الحفظ": "progress_memlog",
+    "📋 سجل النشاط": "progress_activity",
+    "💡 اقتراحات": "progress_suggestions",
+    # ── المستوى 1: الإعدادات ──
+    "📝 الهدف اليومي": "settings_daily",
+    "📝 الهدف الأسبوعي": "settings_weekly",
+    "⏰ التذكيرات": "settings_reminders",
+    "🔔 الإشعارات": "settings_notifications",
+    "📖 حزب القراءة": "settings_reading_hizb",
+    "🎧 حزب الاستماع": "settings_listening_hizb",
+    "📝 آخر محفوظ": "settings_last_page",
+    # ── زر الرجوع (مُشترك) ──
+    "🔙 رجوع": "nav_back",
 }
 
 
@@ -3931,25 +3957,176 @@ async def process_free_input(update: Update, context: ContextTypes.DEFAULT_TYPE,
 # خريطة نصوص ReplyKeyboard
 
 
+async def _handle_keyboard_action(update: Update, context: ContextTypes.DEFAULT_TYPE, cmd: str):
+    """معالج أزرار اللوحات المتداخلة — يُنفذ الإجراء ويُبقي اللوحة الفرعية."""
+    user_id = update.effective_user.id
+    msg = update.message
+
+    # ── التنقل: رجوع → لوحة رئيسية ──
+    if cmd == "nav_back":
+        INPUT_STATE.pop(user_id, None)
+        await msg.reply_text(
+            "🏠 <b>القائمة الرئيسية</b>",
+            parse_mode=ParseMode.HTML,
+            reply_markup=main_keyboard(),
+        )
+        return
+
+    # ── التنقل: لوحة التحكم ──
+    if cmd == "nav_main_panel":
+        await show_main_panel(update, context)
+        return
+
+    # ── التنقل: ورد اليوم → عرض ملخص + لوحة فرعية ──
+    if cmd == "nav_today":
+        async with AsyncSessionLocal() as session:
+            user = await get_or_create_user(session, user_id)
+            if not user.onboarding_done:
+                await start_onboarding(update, context, welcome=False)
+                return
+            progress = await get_or_create_progress(session, user.id)
+            plan = await compute_today_plan(session, user, progress)
+        text = render_today_dashboard(plan)
+        await msg.reply_text(text, parse_mode=ParseMode.HTML, disable_web_page_preview=True, reply_markup=today_sub_keyboard())
+        return
+
+    # ── التنقل: الحصون الخمسة → لوحة فرعية ──
+    if cmd == "nav_fortresses":
+        await msg.reply_text(
+            "🏰 <b>الحصون الخمسة</b>\n\nاختر حصنًا لعرض تفاصيله:",
+            parse_mode=ParseMode.HTML, reply_markup=fortresses_sub_keyboard(),
+        )
+        return
+
+    # ── التنقل: تقدمي → لوحة فرعية ──
+    if cmd == "nav_progress":
+        await msg.reply_text(
+            "📊 <b>التقدم والإحصائيات</b>\n\nاختر قسمًا:",
+            parse_mode=ParseMode.HTML, reply_markup=progress_sub_keyboard(),
+        )
+        return
+
+    # ── التنقل: الإعدادات → لوحة فرعية ──
+    if cmd == "nav_settings":
+        async with AsyncSessionLocal() as session:
+            user = await get_or_create_user(session, user_id)
+            result = await session.execute(select(UserSettings).where(UserSettings.user_id == user.id))
+            settings_list = list(result.scalars().all())
+        text = render_settings_panel(user, settings_list)
+        await msg.reply_text(text, parse_mode=ParseMode.HTML, disable_web_page_preview=True, reply_markup=settings_sub_keyboard())
+        return
+
+    # ── المهام: تبديل حالة مهمة ──
+    is_task = cmd.startswith("task_") and cmd[5:] in TASK_FIELD_MAP
+    if is_task:
+        task_type = cmd[5:]
+        async with AsyncSessionLocal() as session:
+            user = await get_or_create_user(session, user_id)
+            progress = await get_or_create_progress(session, user.id)
+            result = await toggle_task(session, user, progress, task_type)
+            await session.refresh(progress)
+            await session.refresh(user)
+        if result.get("success"):
+            action = result["action"]
+            icon = "✅" if action == "done" else "↩️"
+            label = TASK_LABELS_AR.get(task_type, task_type)
+            detail = ""
+            if task_type == "memorize" and action == "done":
+                detail = f" — وصلت للوجه <b>{user.next_hifz_page - 1}</b> 🎉"
+            elif task_type == "reading" and action == "done":
+                detail = f" — الحزب <b>{user.reading_hizb_current}</b>"
+            elif task_type == "listening" and action == "done":
+                detail = f" — الحزب <b>{user.listening_hizb_current}</b>"
+            done_str = "مكتمل" if action == "done" else "تم التراجع"
+            reply_text = f"{icon} {label}: {done_str}{detail}"
+        else:
+            reply_text = "⚠️ لم يتم تسجيل المهمة"
+            if result.get("message"):
+                reply_text += f"\n\n{result['message']}"
+        await msg.reply_text(reply_text, parse_mode=ParseMode.HTML, reply_markup=today_sub_keyboard())
+        return
+
+    # ── الحصون: عرض تفاصيل ──
+    if cmd.startswith("fortress_"):
+        fortress_num = cmd.split("_")[1]
+        plan = await _get_plan(update)
+        if plan is None:
+            await start_onboarding(update, context, welcome=False)
+            return
+        renderers = {"1": render_fortress_1, "2": render_fortress_2, "3": render_fortress_3, "4": render_fortress_4, "5": render_fortress_5}
+        renderer = renderers.get(fortress_num)
+        if renderer:
+            text = renderer(plan)
+            await msg.reply_text(text, parse_mode=ParseMode.HTML, disable_web_page_preview=True, reply_markup=fortresses_sub_keyboard())
+        return
+
+    # ── التقدم ──
+    if cmd == "progress_stats":
+        await show_progress(update, context)
+        return
+    if cmd == "progress_memlog":
+        async with AsyncSessionLocal() as session:
+            user = await get_or_create_user(session, user_id)
+            logs = await get_memorization_log(session, user.id)
+        text = render_memorization_log(logs)
+        await msg.reply_text(text, parse_mode=ParseMode.HTML, disable_web_page_preview=True, reply_markup=progress_sub_keyboard())
+        return
+    if cmd == "progress_activity":
+        await show_activity_log(update, context)
+        return
+    if cmd == "progress_suggestions":
+        async with AsyncSessionLocal() as session:
+            user = await get_or_create_user(session, user_id)
+            suggestions = await generate_suggestions(session, user)
+        text = render_suggestions(suggestions)
+        await msg.reply_text(text, parse_mode=ParseMode.HTML, disable_web_page_preview=True, reply_markup=progress_sub_keyboard())
+        return
+
+    # ── الإعدادات ──
+    if cmd == "settings_daily":
+        await msg.reply_text("📊 <b>اختر المقدار اليومي الجديد:</b>", parse_mode=ParseMode.HTML, reply_markup=daily_amount_inline())
+        return
+    if cmd == "settings_weekly":
+        await msg.reply_text("📚 <b>اختر المقدار الأسبوعي الجديد:</b>", parse_mode=ParseMode.HTML, reply_markup=weekly_amount_inline())
+        return
+    if cmd == "settings_reminders":
+        await show_reminders_settings(update, context)
+        return
+    if cmd == "settings_notifications":
+        async with AsyncSessionLocal() as session:
+            user = await get_or_create_user(session, user_id)
+            new_state = not user.notifications_enabled
+            await update_settings(session, user, notifications=new_state)
+        state_str = "مفعّلة ✅" if new_state else "معطّلة ❌"
+        await msg.reply_text(f"🔔 <b>الإشعارات: {state_str}</b>", parse_mode=ParseMode.HTML, reply_markup=settings_sub_keyboard())
+        return
+    if cmd == "settings_reading_hizb":
+        INPUT_STATE[user_id] = "waiting_for_reading_hizb"
+        await msg.reply_text("📖 <b>تعديل حزب القراءة</b>\n\nأرسلي رقم الحزب (1-60):", parse_mode=ParseMode.HTML, reply_markup=settings_sub_keyboard())
+        return
+    if cmd == "settings_listening_hizb":
+        INPUT_STATE[user_id] = "waiting_for_listening_hizb"
+        await msg.reply_text("🎧 <b>تعديل حزب الاستماع</b>\n\nأرسلي رقم الحزب (1-60):", parse_mode=ParseMode.HTML, reply_markup=settings_sub_keyboard())
+        return
+    if cmd == "settings_last_page":
+        INPUT_STATE[user_id] = "waiting_for_last_page"
+        await msg.reply_text("📝 <b>تعديل آخر وجه محفوظ</b>\n\nأرسلي رقم الوجه:", parse_mode=ParseMode.HTML, reply_markup=settings_sub_keyboard())
+        return
+
+
 async def handle_free_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """معالج النص الحر — NLP بسيط + توجيه للأوامر."""
+    """معالج النص الحر — لوحات متداخلة + NLP + إدخال يدوي."""
     user_id = update.effective_user.id
     text = update.message.text.strip()
 
-    # 1. لو النص يطابق أحد أزرار الـ ReplyKeyboard
+    # 1. لو النص يطابق أحد أزرار الـ ReplyKeyboard المتداخلة
     if text in KEYBOARD_TEXT_MAP:
-        cmd = KEYBOARD_TEXT_MAP[text]
-        if cmd == "main_panel":
-            await show_main_panel(update, context)
-        elif cmd == "today":
-            await show_today_dashboard(update, context)
-        elif cmd == "progress":
-            await show_progress(update, context)
-        elif cmd == "fortresses":
-            await show_fortresses_menu(update, context)
-        elif cmd == "settings":
-            await show_settings_panel(update, context)
-        return
+        # لكن: لو المستخدم في وضع إدخال رقمي، لا نعالج الأزرار (إلا رجوع)
+        if user_id in INPUT_STATE and text != "🔙 رجوع":
+            pass  # نترك الإدخال اليدوي يعالجها
+        else:
+            await _handle_keyboard_action(update, context, KEYBOARD_TEXT_MAP[text])
+            return
 
     # 2. لو المستخدم في وضع الإدخال اليدوي (إعدادات)
     if user_id in INPUT_STATE:
@@ -3970,7 +4147,7 @@ async def handle_free_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # 5. نص حر غير مفهوم
     await update.message.reply_text(
-        "💡 <b>اضغط أحد أزرار القائمة بالأسفل</b>\n\n"
+        "٠️ <b>اضغط أحد أزرار القائمة بالأسفل</b>\n\n"
         "أو جرّب:\n"
         "• <code>صفحة 50</code> — تعديل آخر محفوظ\n"
         "• <code>وش نحفظ اليوم؟</code> — عرض ورد اليوم\n"
@@ -3980,7 +4157,6 @@ async def handle_free_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=main_keyboard(),
         disable_web_page_preview=True,
     )
-
 
 async def try_natural_language(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str) -> bool:
     """محاولة فهم اللغة الطبيعية العربية.
