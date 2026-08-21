@@ -36,6 +36,7 @@ from datetime import date, date as date_cls, datetime, timedelta, timezone
 from typing import Optional
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 import sys
+import types as _types
 
 # --- مكتبات خارجية ---
 import sqlalchemy
@@ -185,7 +186,6 @@ def is_postgres() -> bool:
 # --- إنشاء كائن config كـ namespace ---
 # كل الثوابت معرّفة مباشرة أعلاه، لكن بقية الكود يستخدم config.XXX
 # فننشئ كائنًا بسيطًا يحتوي عليها كلها للتوافقية
-import types as _types  # noqa: E402
 config = _types.SimpleNamespace(
     BOT_TOKEN=BOT_TOKEN, DATABASE_URL=DATABASE_URL, ADMIN_ID=ADMIN_ID,
     DEFAULT_TIMEZONE=DEFAULT_TIMEZONE, PORT=PORT,
@@ -2475,7 +2475,7 @@ def render_today_dashboard(plan: dict) -> str:
     reading_done_icon = "✅" if progress.reading_done else "⬜"
 
     # الاستماع
-    lst = plan["listening"]
+    listening = plan["listening"]
     l_info = plan["listening_info"]
     listening_done_icon = "✅" if progress.listening_done else "⬜"
 
@@ -2498,6 +2498,7 @@ def render_today_dashboard(plan: dict) -> str:
         ps_status = ""
 
     # الحفظ
+    h = plan["hifz"]
     memo_done_icon = "✅" if progress.memorize_done else "⬜"
 
     # مراجعة القريب
@@ -2518,8 +2519,8 @@ def render_today_dashboard(plan: dict) -> str:
         f"   الأوجه {bold(fmt_range(r['pages_start'], r['pages_end']))}",
         f"   الدورة {r_info['current_hizb']}/{r_info['total_in_cycle']} — ختمة #{r_info['current_khatmah_number']}",
         "",
-        f"{listening_done_icon} 🎧 <b>الاستماع</b> — الحزب {bold(l['hizb'])}",
-        f"   الأوجه {bold(fmt_range(l['pages_start'], l['pages_end']))}",
+        f"{listening_done_icon} 🎧 <b>الاستماع</b> — الحزب {bold(listening['hizb'])}",
+        f"   الأوجه {bold(fmt_range(listening['pages_start'], listening['pages_end']))}",
         f"   الدورة {l_info['current_hizb']}/{l_info['total_in_cycle']} — ختمة #{l_info['current_khatmah_number']}",
         "",
         "━━━━━━━━━━━━━━━━",
@@ -2658,7 +2659,7 @@ def render_fortress_1(plan: dict) -> str:
     """الحصن الأول — التهيئة."""
     r = plan["reading"]
     r_info = plan["reading_info"]
-    lst = plan["listening"]
+    listening = plan["listening"]
     l_info = plan["listening_info"]
     parts = [
         "📖 <b>الحصن الأول — التهيئة المستمرة</b>",
@@ -2672,8 +2673,8 @@ def render_fortress_1(plan: dict) -> str:
         "",
         "━━━━━━━━━━━━━━━━",
         "🎧 <b>الاستماع اليوم</b>",
-        f"   حزب اليوم: <b>{l['hizb']}</b>",
-        f"   الأوجه: <b>{fmt_range(l['pages_start'], l['pages_end'])}</b>",
+        f"   حزب اليوم: <b>{listening['hizb']}</b>",
+        f"   الأوجه: <b>{fmt_range(listening['pages_start'], listening['pages_end'])}</b>",
         f"   الدورة: {l_info['current_hizb']}/{l_info['total_in_cycle']} ({l_info['percent']}%)",
         f"   ختمة رقم: <b>{l_info['current_khatmah_number']}</b>",
         "",
